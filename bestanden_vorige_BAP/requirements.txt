@@ -1,0 +1,14 @@
+numpy
+opencv-python
+onvif-zeep
+wsdiscovery
+cryptography
+qreader
+qrcode
+Pillow
+requests
+getmac
+pydantic-settings
+paho-mqtt
+esptool
+mpremote

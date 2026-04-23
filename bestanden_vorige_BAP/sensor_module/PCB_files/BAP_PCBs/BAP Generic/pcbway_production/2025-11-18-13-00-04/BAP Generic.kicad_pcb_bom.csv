@@ -1,0 +1,13 @@
+﻿Designator,Quantity,Value,Footprint,Package,MPN,DNP,Mount_Type,Description,Manufacturer Part
+"PWR1, WIFI1",2,LED,LED_D5.0mm,,,,tht,Common 5mm diameter LED,
+R1,1,LDR07,R_LDR_5.1x4.3mm_P3.4mm_Vertical,,,,tht,light dependent resistor,
+"R2, R4",2,330,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,,,,tht,Resistor,
+R3,1,10k,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,,,,tht,Resistor,
+TP1,1,SCL,TestPoint_Pad_D1.0mm,,,,tht,test point,
+TP2,1,SDA,TestPoint_Pad_D1.0mm,,,,tht,test point,
+TP3,1,RX,TestPoint_Pad_D1.0mm,,,,tht,test point,
+TP4,1,LDR,TestPoint_Pad_D1.0mm,,,,tht,test point,
+TP5,1,TX,TestPoint_Pad_D1.0mm,,,,tht,test point,
+U1,1,T-QT Pro,LilyGO TQ-T Pro,,,,tht,,
+U3,1,ENS160+AHT21,ENS160+AHT21,,,,tht,,ENS160-AHT21 Air sensor
+U4,1,HMMD mmwave,Foot_Mmwave,,,,tht,Waveshare,

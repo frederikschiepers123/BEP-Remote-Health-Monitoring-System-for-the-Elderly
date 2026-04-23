@@ -1,0 +1,21 @@
+﻿pos_x,pos_y,rotation,side,designator,mpn,pack,footprint,value,mount_type
+213.25,-100.675,90.0,top,12V,,,PinSocket_1x02_P2.54mm_Vertical,12V Input,tht
+203.0,-79.0,90.0,top,C1,,,C_Disc_D3.0mm_W1.6mm_P2.50mm,100 nF,tht
+209.0,-79.0,90.0,top,C2,,,C_Disc_D3.0mm_W1.6mm_P2.50mm,330 nF,tht
+213.25,-96.075,90.0,top,CAM,,,PinSocket_1x02_P2.54mm_Vertical,Cam Output,tht
+207.674,-117.597,-90.0,top,CAM1,,,LED_D5.0mm,LED,tht
+189.074,-117.597,-90.0,top,PWR2,,,LED_D5.0mm,LED,tht
+194.19,-78.36,0.0,top,Q1,,,TO-92_Inline_Wide,2N3904,tht
+200.078,-87.4307,0.0,top,R10,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,Rb,tht
+213.0,-87.5,180.0,top,R11,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,1000,tht
+192.46,-84.0,0.0,top,R5,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,330,tht
+215.646,-76.532,-90.0,top,R6,,,R_LDR_5.1x4.3mm_P3.4mm_Vertical,LDR07,tht
+192.46,-87.45,0.0,top,R7,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,10k,tht
+213.0,-84.0,180.0,top,R8,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,330,tht
+200.078,-83.9615,0.0,top,R9,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,Rc,tht
+175.006,-102.997,0.0,top,U2,,,LilyGO TQ-T Pro,T-QT Pro,tht
+186.3375,-73.092,90.0,top,U5,,,ENS160+AHT21,ENS160+AHT21,tht
+211.9555,-116.3205,90.0,top,U6,,,DFRobot SEN0623 C1001 mmWave Human Detection Sensor,C1001,tht
+194.77,-66.46,-90.0,top,U7,,,TO-220-3_Horizontal_TabDown,L7805,tht
+213.25,-91.475,90.0,top,USB,,,PinSocket_1x02_P2.54mm_Vertical,USB_C Output,tht
+198.374,-117.597,-90.0,top,WIFI2,,,LED_D5.0mm,LED,tht

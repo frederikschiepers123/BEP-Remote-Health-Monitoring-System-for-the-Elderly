@@ -1,0 +1,11 @@
+[Unit]
+Description=SBC service for the Remote Medical Monitoring system
+After=network.target   
+
+[Service]
+Type=simple
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

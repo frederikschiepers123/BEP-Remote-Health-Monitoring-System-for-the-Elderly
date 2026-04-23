@@ -1,0 +1,14 @@
+user new_dev
+topic write enroll/request
+topic read enroll/response
+
+user registration_server_user
+topic readwrite enroll/#
+topic readwrite verification/#
+
+
+pattern write verification/%c/request
+pattern read verification/%c/response
+
+pattern write enroll/%c/request
+pattern read enroll/%c/response

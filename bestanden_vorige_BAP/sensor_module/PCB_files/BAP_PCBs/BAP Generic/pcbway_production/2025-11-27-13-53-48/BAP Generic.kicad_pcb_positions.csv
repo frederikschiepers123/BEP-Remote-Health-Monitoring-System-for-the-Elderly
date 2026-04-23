@@ -1,0 +1,10 @@
+﻿pos_x,pos_y,rotation,side,designator,mpn,pack,footprint,value,mount_type
+118.1348,-112.153,0.0,top,PWR1,,,LED_D5.0mm,LED,tht
+126.9348,-63.153,0.0,top,R1,,,R_LDR_5.1x4.3mm_P3.4mm_Vertical,LDR07,tht
+126.5548,-69.153,0.0,top,R2,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,330,tht
+126.5548,-75.153,0.0,top,R3,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,10k,tht
+126.5548,-81.153,0.0,top,R4,,,R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal,330,tht
+105.1348,-100.153,0.0,top,U1,,,LilyGO TQ-T Pro,T-QT Pro,tht
+119.4375,-69.992,90.0,top,U3,,,ENS160+AHT21,ENS160+AHT21,tht
+115.134,-105.153,0.0,top,U4,,,Foot_Mmwave,HMMD,tht
+126.1348,-112.153,0.0,top,WIFI1,,,LED_D5.0mm,LED,tht

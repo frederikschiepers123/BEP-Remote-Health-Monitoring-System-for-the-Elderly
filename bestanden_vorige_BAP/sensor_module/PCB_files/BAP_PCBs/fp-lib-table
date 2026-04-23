@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "ProPrj_BAP PCB Bed_Bath_2025-11-06")(type "KiCad")(uri "$(KIPRJMOD)/ProPrj_BAP PCB Bed_Bath_2025-11-06.pretty")(options "")(descr ""))
+)

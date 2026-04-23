@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "ProPrj_Parts_2025-11-14")(type "KiCad")(uri "$(KIPRJMOD)/ProPrj_Parts_2025-11-14.pretty")(options "")(descr ""))
+)

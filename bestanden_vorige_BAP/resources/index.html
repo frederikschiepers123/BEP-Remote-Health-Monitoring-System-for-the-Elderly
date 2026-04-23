@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Device Management</title>
+
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+<script id="tailwind-config">
+tailwind.config = {
+  darkMode: "class",
+  theme: {
+    extend: {
+      colors: {
+        primary: "#137fec",
+        "background-light": "#f6f7f8",
+        "background-dark": "#101922",
+      },
+      fontFamily: {
+        display: ["Inter"]
+      },
+      borderRadius: {
+        "DEFAULT": "0.25rem",
+        "lg": "0.5rem",
+        "xl": "0.75rem",
+        "full": "9999px"
+      }
+    }
+  }
+}
+</script>
+
+<style>
+body { font-family: 'Inter', sans-serif; }
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+</style>
+</head>
+
+<body class="bg-background-light dark:bg-background-dark font-display">
+<div class="relative flex h-auto min-h-screen w-full flex-col group/design-root overflow-x-hidden">
+<div class="layout-container flex h-full grow flex-col">
+
+<header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-gray-200 dark:border-b-gray-700 px-4 sm:px-6 lg:px-8 py-3 bg-white dark:bg-background-dark sticky top-0 z-10">
+  <div class="flex items-center gap-4 text-gray-800 dark:text-gray-100">
+      <span class="material-symbols-outlined text-primary text-2xl">router</span>
+      <h2 class="text-lg font-bold leading-tight tracking-[-0.015em]">Device Management</h2>
+  </div>
+
+  <div class="flex items-center gap-4">
+      <div class="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10"
+           style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuAMMJHWiVKGXtNGoTTo3dqqlxSaPQSpFXnpEFslclsapzDqpnuGJMTC0noemRhIuhTvKiyimfuSnWcrcKfgiT-Ey7chHqSr-IpiCGWrkNqvZdlVy-xdAqXx4XhNmaTijx8-95i5ry1mQZkwRuPEaGh27DCIbMuaTfbCdY3E2nGeYa_RNqKLOaEbofko7B2gOMLnmfifxPwpW3qWOwaz88QFAmWtxlS8Ogsxjq7rlQFnxv2FmheGE1xvDdZVjXrC_3_yQFVsh9O5wHNA");'>
+      </div>
+  </div>
+</header>
+
+<main class="flex-1 px-4 sm:px-6 lg:px-8 py-8">
+<div class="mx-auto flex max-w-7xl flex-col gap-8">
+
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <div class="flex min-w-72 flex-col gap-2">
+      <p class="text-gray-900 dark:text-white text-3xl font-black leading-tight tracking-[-0.033em]">Manage Devices</p>
+      <p class="text-gray-500 dark:text-gray-400 text-base font-normal leading-normal">View and manage all registered devices.</p>
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-6">
+    <div class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+      <div class="max-h-[60vh] overflow-y-auto">
+
+        <table class="w-full">
+          <thead class="sticky top-0 bg-gray-50 dark:bg-gray-900/50">
+            <tr>
+              <th class="px-6 py-4 text-left text-gray-600 dark:text-gray-300 text-xs font-medium uppercase tracking-wider">Index</th>
+              <th class="px-6 py-4 text-left text-gray-600 dark:text-gray-300 text-xs font-medium uppercase tracking-wider">UUID</th>
+              <th class="px-6 py-4 text-left text-gray-600 dark:text-gray-300 text-xs font-medium uppercase tracking-wider">MAC Address</th>
+              <th class="px-6 py-4 text-left text-gray-600 dark:text-gray-300 text-xs font-medium uppercase tracking-wider">Device Type</th>
+              <th class="px-6 py-4 text-left text-gray-600 dark:text-gray-300 text-xs font-medium uppercase tracking-wider">Label</th>
+            </tr>
+          </thead>
+
+          <!-- Dynamic JSON-loaded rows -->
+          <tbody id="device-table-body"
+                 class="divide-y divide-gray-200 dark:divide-gray-700"></tbody>
+
+        </table>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+</main>
+
+</div>
+</div>
+
+<!-- Load Devices from JSON -->
+<script>
+async function loadDevices() {
+    try {
+        const response = await fetch("device_registry.json");
+        const devices = await response.json();
+
+        const tbody = document.getElementById("device-table-body");
+
+        Object.values(devices).forEach((device, idx) => {
+            const tr = document.createElement("tr");
+            tr.className = "hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors";
+
+            tr.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 dark:text-white font-mono">
+                    ${idx + 1}
+                </td>
+
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white font-mono">
+                    ${device.uuid}
+                </td>
+
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 font-mono">
+                    ${formatMac(device.mac_address)}
+                </td>
+
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    ${device.device_type}
+                </td>
+
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    ${device.label}
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+
+    } catch (err) {
+        console.error("Failed to load devices.json:", err);
+    }
+}
+
+function formatMac(value) {
+    // Already a string → return directly
+    if (typeof value === "string") return value.toUpperCase();
+
+    // Integer → convert to 48-bit hex → format with colons
+    const hex = value.toString(16).padStart(12, "0").toUpperCase();
+    return hex.match(/.{1,2}/g).join(":");
+}
+
+// load data on page load
+loadDevices();
+</script>
+
+</body>
+</html>
