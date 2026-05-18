@@ -55,7 +55,7 @@ Temporary Items
 .Trash-*
 
 # Ignore all modules
-/modules/*
+# /modules/*  # No.
 
 # Ignore users config file but keep the samples.
 config
