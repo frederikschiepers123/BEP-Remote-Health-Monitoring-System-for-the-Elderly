@@ -53,13 +53,13 @@ let config = {
 			module: "MMM-SensorUI",
 			position: "top_left"
 		},
-		{
-			module: 'MMM-Template',
-			position: 'lower_third',
-			config: {
-				exampleContent: 'Welcome world'
-			}
-    	},
+		// {
+		// 	module: 'MMM-Template',
+		// 	position: 'lower_third',
+		// 	config: {
+		// 		exampleContent: 'Welcome world'
+		// 	}
+    	// },
 		// {
 		// 	module: "calendar",
 		// 	header: "US Holidays",

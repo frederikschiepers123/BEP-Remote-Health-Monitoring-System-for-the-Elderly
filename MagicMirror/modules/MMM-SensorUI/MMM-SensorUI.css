@@ -1,0 +1,25 @@
+.sensorWrapper {
+  display: flex;
+  justify-content: space-around;
+  width: 100%;
+}
+
+.sensor {
+  text-align: center;
+  padding: 10px;
+}
+
+.sensorIcon {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.sensorValue {
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.sensorLabel {
+  font-size: 16px;
+  opacity: 0.7;
+}
