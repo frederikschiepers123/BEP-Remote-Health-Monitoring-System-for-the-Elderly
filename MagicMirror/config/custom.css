@@ -27,3 +27,19 @@
 
   --gap-modules: 30px;
 }
+
+@font-face {
+  font-family: "Tiresias";
+  src: url("/css/fonts/Tiresias_Infofont-webfont.woff") format("woff");
+  font-weight: normal;
+  font-style: normal;
+}
+
+html, body {
+  font-family: "Tiresias" !important;
+}
+
+body {
+  background-color: black !important;
+  color: white !important;
+}
