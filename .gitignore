@@ -1,0 +1,36 @@
+# Build artefacts
+build/
+*.elf
+*.uf2
+*.bin
+*.map
+*.lst
+*.d
+
+# Private keys, certificates, credentials — NEVER committed.
+# See docs/technical-audit.md §D.1 for why this matters.
+*.key
+*.pem
+*.der
+*.crt
+*.csr
+creds/
+certs/
+/cfg/
+
+# IDE / OS
+.vscode/settings.json
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Python (provisioning tooling)
+__pycache__/
+*.pyc
+.venv/
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
