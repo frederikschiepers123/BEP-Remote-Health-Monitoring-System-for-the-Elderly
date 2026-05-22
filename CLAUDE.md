@@ -631,18 +631,21 @@ firmware  ──JSON──►  rmms/<uuid>/light           ──►  Radxa subs
                                             redacts/qualifies for UI
                                                        │
                                                        ▼
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/presence  ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/wellness  ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/ambient   ◄── Radxa publishes
+MagicMirror² ◄──JSON──── rmms/ui/<uuid>/presence     ◄── Radxa publishes
+MagicMirror² ◄──JSON──── rmms/ui/<uuid>/wellness     ◄── Radxa publishes
+MagicMirror² ◄──JSON──── rmms/ui/<uuid>/ambient      ◄── Radxa publishes
+MagicMirror² ◄──JSON──── rmms/ui/<uuid>/heart_rate   ◄── Radxa publishes
+MagicMirror² ◄──JSON──── rmms/ui/<uuid>/temperature  ◄── Radxa publishes
 ```
 
 **Rules:**
 - The firmware **never publishes to `rmms/ui/...`**. That namespace is owned by
   the Radxa.
-- The firmware **never publishes raw numeric vitals in a format intended for
-  direct human display.** Per the project's UX requirement (no raw heart-rate
-  numbers shown to elderly users in a mirror — anxiety and fall-hazard
-  considerations), all display logic is downstream.
+- Heart rate (`heart_bpm`) and temperature (`temp_c`) are republished as exact
+  numeric values on `rmms/ui/<uuid>/heart_rate` and `rmms/ui/<uuid>/temperature`
+  respectively. All other raw vitals (breath rate, humidity, pressure, lux,
+  distance) remain qualitative only. This is a deliberate exception to the
+  original no-numbers UX rule, made by the project team.
 - If MagicMirror² needs anything that the Radxa is not currently publishing,
   the fix lives in the Radxa repo, not this one.
 

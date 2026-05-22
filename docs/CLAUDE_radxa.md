@@ -632,13 +632,15 @@ and downstream consumers.
 | `rmms/ui/<uuid>/presence` | `{"present": true, "confidence": "high"\|"medium"\|"low"}` | On radar presence change |
 | `rmms/ui/<uuid>/wellness` | `{"status": "ok"\|"check"\|"alert", "since_ms": 12345}` | On clinical-threshold cross |
 | `rmms/ui/<uuid>/ambient` | `{"temp": "comfortable"\|"warm"\|"cold", "air": "good"\|"poor"}` | On env change |
-| `rmms/ui/<uuid>/connection` | `{"online": true, "last_seen_ms": 12345}` | On status topic change |
+| `rmms/ui/<uuid>/connection`  | `{"online": true, "last_seen_ms": 12345}` | On status topic change |
+| `rmms/ui/<uuid>/heart_rate`  | `{"bpm": 72.0}` | On every radar sample with valid heart_bpm |
+| `rmms/ui/<uuid>/temperature` | `{"temp_c": 21.5}` | On every env sample |
 
-**Qualitative, not quantitative.** Per the firmware repo's §9.5: no raw
-heart-rate numbers, no exact temperatures, no battery percentages. The
-mirror shows ambient signals — "Anna is home and well" — not clinical
-dashboards. Numeric vitals go to the hospital, qualitative summaries go to
-the mirror.
+**Mostly qualitative, with two numeric exceptions.** Heart rate (`bpm`) and
+temperature (`temp_c`) are published as exact numeric values by explicit
+project decision. All other raw vitals (breath rate, humidity, pressure, lux,
+distance) remain qualitative. Numeric vitals also go to the hospital FHIR
+endpoint via the standard pipeline.
 
 ### 11.2 Threshold logic
 
