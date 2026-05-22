@@ -1,0 +1,50 @@
+/* body {
+  background-color: red !important;
+} */
+
+.sensorWrapper {
+  /* display: flex;
+  flex-direction: column; 
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%; */
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* 2 columns */
+  gap: 20px;
+  width: 100%;
+  align-items: start;
+}
+
+.sensorColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sensor {
+  text-align: center;
+  padding: 5px;
+  margin-bottom: 5px;
+}
+
+.sensorIcon {
+  font-size: 48px;
+  margin-bottom: 5px;
+}
+
+.sensorValue {
+  font-size: 32px;
+  font-weight: bold;
+}
+
+.sensorLabel {
+  font-size: 25px;
+  opacity: 1;
+}
+
+.sensor,
+.sensorValue,
+.sensorLabel,
+.sensorIcon {
+  color: white !important;
+}
