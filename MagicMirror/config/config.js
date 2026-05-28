@@ -47,11 +47,11 @@ let config = {
 		// },
 		{
 			module: "clock",
-			position: "center"
+			position: "top_center"
 		},
 		{
 			module: "MMM-SensorUI",
-			position: "top_center"
+			position: "fullscreen_below"
 		},
 		{
 			module: "MMM-CustomMQTTBridge",
