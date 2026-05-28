@@ -19,15 +19,18 @@
 /* Different background colors */
 
 .vitalWrapper {
-  background: rgba(180, 40, 40, 0.25);
+  /* background: rgba(180, 40, 40, 0.25); */
+  background: rgba(0, 20, 46, 1);
 }
 
 .envWrapper {
-  background: rgba(40, 120, 180, 0.25);
+  /* background: rgba(40, 120, 180, 0.25); */
+  background: rgba(0, 20, 46, 1);
 }
 
 .infoWrapper {
-  background: rgba(80, 80, 80, 0.25);
+  /* background: rgba(80, 80, 80, 0.25); */
+  background: rgba(0, 74, 173, 1);
 }
 
 /*
@@ -58,7 +61,8 @@
   align-items: center;
   justify-content: space-between;
 
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /*
@@ -74,11 +78,42 @@
  * SENSOR VALUE
  */
 
-.statusValue {
+/* .statusValue {
   font-size: 42px;
   font-weight: bold;
   line-height: 1.1;
   margin-bottom: 12px;
+} */
+
+
+.statusValue {
+  /* display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+
+  margin-bottom: 12px; */
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.statusNumber {
+  font-size: 72px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+.statusUnit {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+
+  text-align: left;
+
+  white-space: nowrap;
 }
 
 /*
@@ -113,4 +148,42 @@
   flex: 1;
   font-size: 28px;
   line-height: 1.4;
+}
+
+/*
+ * MEASURING MODE
+ */
+
+.measuringMode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.measuringIcons {
+  display: flex;
+  gap: 40px;
+  font-size: 58px;
+  margin-bottom: 20px;
+}
+
+.measuringText {
+  font-size: 38px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.statusValueTextOnly {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.statusTextOnly {
+  font-size: 42px;
+  font-weight: 700;
+  text-transform: capitalize;
+  text-align: center;
+  line-height: 1.1;
 }

@@ -55,23 +55,67 @@ Module.register("MMM-SensorUI", {
     const vitalWrapper = document.createElement("div");
     vitalWrapper.className = "vitalWrapper";
 
-    vitalWrapper.appendChild(
-      createStatusCard(
-        "fa-heart-pulse",
-        this.heartRate,
-        "BPM",
-        this.heartRateTL
-      )
-    );
+    const vitalReady =
+      hasValue(this.heartRate) &&
+      hasValue(this.respiratoryRate);
 
-    vitalWrapper.appendChild(
-      createStatusCard(
-        "fa-lungs",
-        this.respiratoryRate,
-        "RPM",
-        this.respiratoryRateTL
-      )
-    );
+    if (!vitalReady) {
+
+      vitalWrapper.classList.add("measuringMode");
+
+      const iconRow = document.createElement("div");
+      iconRow.className = "measuringIcons";
+
+      iconRow.innerHTML = `
+        <i class="fas fa-heart-pulse"></i>
+        <i class="fas fa-lungs"></i>
+      `;
+
+      const measuringText = document.createElement("div");
+      measuringText.className = "measuringText";
+      measuringText.innerHTML = "Measuring...";
+
+      vitalWrapper.appendChild(iconRow);
+      vitalWrapper.appendChild(measuringText);
+
+    } else {
+
+      vitalWrapper.appendChild(
+        createStatusCard(
+          "fa-heart-pulse",
+          this.heartRate,
+          "BPM",
+          this.heartRateTL
+        )
+      );
+
+      vitalWrapper.appendChild(
+        createStatusCard(
+          "fa-lungs",
+          this.respiratoryRate,
+          "breaths<br>per min",
+          this.respiratoryRateTL
+        )
+      );
+    }
+
+    // vitalWrapper.appendChild(
+    //   createStatusCard(
+    //     "fa-heart-pulse",
+    //     this.heartRate,
+    //     "BPM",
+    //     this.heartRateTL
+    //   )
+    // );
+
+    // vitalWrapper.appendChild(
+    //   createStatusCard(
+    //     "fa-lungs",
+    //     this.respiratoryRate,
+    //     "RPM",
+    //     this.respiratoryRateTL
+    //   )
+    // );
 
     /*
       * =========================
@@ -82,32 +126,88 @@ Module.register("MMM-SensorUI", {
     const envWrapper = document.createElement("div");
     envWrapper.className = "envWrapper";
 
-    envWrapper.appendChild(
-      createStatusCard(
-        "fa-temperature-half",
-        this.temperature,
-        "°C",
-        this.temperatureTL
-      )
-    );
+    const envReady =
+      hasValue(this.temperature) &&
+      hasValue(this.humidity) &&
+      hasValue(this.airQuality);
 
-    envWrapper.appendChild(
-      createStatusCard(
-        "fa-droplet",
-        this.humidity,
-        "%",
-        this.humidityTL
-      )
-    );
+    if (!envReady) {
 
-    envWrapper.appendChild(
-      createStatusCard(
-        "fa-wind",
-        this.airQuality,
-        "AQI",
-        this.airQualityTL
-      )
-    );    
+      envWrapper.classList.add("measuringMode");
+
+      const iconRow = document.createElement("div");
+      iconRow.className = "measuringIcons";
+
+      iconRow.innerHTML = `
+        <i class="fas fa-temperature-half"></i>
+        <i class="fas fa-droplet"></i>
+        <i class="fas fa-wind"></i>
+      `;
+
+      const measuringText = document.createElement("div");
+      measuringText.className = "measuringText";
+      measuringText.innerHTML = "Measuring...";
+
+      envWrapper.appendChild(iconRow);
+      envWrapper.appendChild(measuringText);
+
+    } else {
+
+      envWrapper.appendChild(
+        createStatusCard(
+          "fa-temperature-half",
+          this.temperature,
+          "°C",
+          this.temperatureTL
+        )
+      );
+
+      envWrapper.appendChild(
+        createStatusCard(
+          "fa-droplet",
+          this.humidity,
+          "%",
+          this.humidityTL
+        )
+      );
+
+      envWrapper.appendChild(
+        createStatusCard(
+          "fa-wind",
+          this.airQuality,
+          "",
+          this.airQualityTL,
+          true
+        )
+      );
+    }
+
+    // envWrapper.appendChild(
+    //   createStatusCard(
+    //     "fa-temperature-half",
+    //     this.temperature,
+    //     "°C",
+    //     this.temperatureTL
+    //   )
+    // );
+
+    // envWrapper.appendChild(
+    //   createStatusCard(
+    //     "fa-droplet",
+    //     this.humidity,
+    //     "%",
+    //     this.humidityTL
+    //   )
+    // );
+
+    // envWrapper.appendChild(
+    //   createStatusCard(
+    //     "fa-wind",
+    //     this.airQuality,
+    //     "AQI",
+    //     this.airQualityTL
+    //   )
+    // );    
 
     /*
     * =========================
@@ -219,12 +319,23 @@ Module.register("MMM-SensorUI", {
           console.log("SensorUI received:", payload);
 
           // Example topic handling
+          if (payload.topic === "sensors/heartrate") {
+              this.heartRate = payload.message;
+          }
+          if (payload.topic === "sensors/respiratoryrate") {
+              this.respiratoryRate = payload.message;
+          }
           if (payload.topic === "sensors/temperature") {
               this.temperature = payload.message;
           }
-
           if (payload.topic === "sensors/humidity") {
               this.humidity = payload.message;
+          }
+          if (payload.topic === "sensors/airquality") {
+              this.airQuality = payload.message;
+          }
+          if (payload.topic === "sensors/infomessage") {
+              this.infoMessage = payload.message;
           }
 
           this.updateDom();
@@ -255,7 +366,7 @@ Module.register("MMM-SensorUI", {
 //   return sensorDiv;
 // }
 
-function createStatusCard(iconName, value, unit, status) {
+function createStatusCard(iconName, value, unit, status, textOnly = false) {
 
   const card = document.createElement("div");
   card.className = "statusCard";
@@ -274,7 +385,46 @@ function createStatusCard(iconName, value, unit, status) {
 
   const valueDiv = document.createElement("div");
   valueDiv.className = "statusValue";
-  valueDiv.innerHTML = `${value}${unit}`;
+
+  if (textOnly) {
+
+    valueDiv.classList.add("statusValueTextOnly");
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "statusTextOnly";
+    textSpan.innerHTML = value;
+
+    valueDiv.appendChild(textSpan);
+
+  } else {
+
+    const numberSpan = document.createElement("span");
+    numberSpan.className = "statusNumber";
+    numberSpan.innerHTML = value;
+
+    const unitSpan = document.createElement("span");
+    unitSpan.className = "statusUnit";
+    unitSpan.innerHTML = unit;
+
+    valueDiv.appendChild(numberSpan);
+    valueDiv.appendChild(unitSpan);
+  }
+
+  // const valueDiv = document.createElement("div");
+  // valueDiv.className = "statusValue";
+
+  // const numberSpan = document.createElement("span");
+  // numberSpan.className = "statusNumber";
+  // numberSpan.innerHTML = value;
+
+  // const unitSpan = document.createElement("span");
+  // unitSpan.className = "statusUnit";
+  // unitSpan.innerHTML = unit;
+
+  // valueDiv.appendChild(numberSpan);
+  // valueDiv.appendChild(unitSpan);
+
+  // valueDiv.innerHTML = `${value}${unit}`;
 
   /*
    * STATUS ICON
@@ -311,4 +461,11 @@ function createStatusCard(iconName, value, unit, status) {
   card.appendChild(statusDiv);
 
   return card;
+}
+
+function hasValue(value) {
+  return value !== "..." &&
+         value !== undefined &&
+         value !== null &&
+         value !== "";
 }

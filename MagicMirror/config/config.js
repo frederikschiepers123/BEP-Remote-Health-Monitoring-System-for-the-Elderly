@@ -51,7 +51,7 @@ let config = {
 		},
 		{
 			module: "MMM-SensorUI",
-			position: "fullscreen_below"
+			position: "bottom_center"
 		},
 		{
 			module: "MMM-CustomMQTTBridge",
