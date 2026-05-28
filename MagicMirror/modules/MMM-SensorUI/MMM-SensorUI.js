@@ -1,18 +1,30 @@
 //MMM-SensorUI.js:
 
-let heartRate = 65; // UWB-HF
-let respiratoryRate = 10; // UWB-HF
-let temperature = 22; // BME or ENS
-let humidity = 45; // BME or ENS
+// Potential placeholder values:
+// let heartRate = 65; // UWB-HF
+// let respiratoryRate = 10; // UWB-HF
+// let temperature = 22; // BME or ENS
+// let humidity = 45; // BME or ENS
 
-let pressure = 101; // BME
-let co2 = 600; // ENS
-let tvoc = 300; // ENS
-let aqi = 28; // ENS
+// let pressure = 101; // BME
+// let co2 = 600; // ENS
+// let tvoc = 300; // ENS
+// let aqi = 28; // ENS
 
 Module.register("MMM-SensorUI", {
   defaults: {},
-  // Override dom generator.
+
+  start: function () {
+    this.heartRate = "...";
+    this.respiratoryRate = "...";
+    this.temperature = "...";
+    this.humidity = "...";
+
+    this.pressure = "...";
+    this.co2 = "...";
+    this.tvoc = "...";
+    this.aqi = "...";
+  },
 
   // Define required scripts.
   getStyles () {
@@ -31,22 +43,22 @@ Module.register("MMM-SensorUI", {
     const sensorsLeft = [
       {
         icon: "fa-heartbeat",
-        value: heartRate,
+        value: this.heartRate,
         label: "BPM"
       },
       {
         icon: "fa-lungs",
-        value: respiratoryRate,
+        value: this.respiratoryRate,
         label: "RPM"
       },
       {
         icon: "fa-temperature-half",
-        value: temperature + "°C",
+        value: this.temperature + "°C",
         label: "Temperature"
       },
       {
         icon: "fa-droplet",
-        value: humidity + "%",
+        value: this.humidity + "%",
         label: "Humidity"
       }
     ];
@@ -62,22 +74,22 @@ Module.register("MMM-SensorUI", {
     const sensorsRight = [
       // {
       //   icon: "fa-gauge",
-      //   value: pressure + " hPa",
+      //   value: this.pressure + " hPa",
       //   label: "Pressure"
       // },
       {
         icon: "fa-smog",
-        value: co2 + " ppm",
+        value: this.co2 + " ppm",
         label: "CO2"
       },
       {
         icon: "fa-wind",
-        value: tvoc + " ppb",
+        value: this.tvoc + " ppb",
         label: "TVOC"
       },
       {
         icon: "fa-chart-simple",
-        value: aqi,
+        value: this.aqi,
         label: "AQI"
       }
     ];
@@ -92,6 +104,27 @@ Module.register("MMM-SensorUI", {
 
     return wrapper;
   },
+
+
+  notificationReceived: function(notification, payload, sender) {
+
+      if (notification === "MQTT_SENSOR_UPDATE") {
+
+          console.log("SensorUI received:", payload);
+
+          // Example topic handling
+          if (payload.topic === "sensors/temperature") {
+              this.temperature = payload.message;
+          }
+
+          if (payload.topic === "sensors/humidity") {
+              this.humidity = payload.message;
+          }
+
+          this.updateDom();
+      }
+  }
+
 });
 
 function createSensor(sensor) {

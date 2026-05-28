@@ -47,12 +47,40 @@ let config = {
 		// },
 		{
 			module: "clock",
-			position: "top_left"
+			position: "center"
 		},
 		{
 			module: "MMM-SensorUI",
-			position: "top_left"
+			position: "top_center"
 		},
+		{
+			module: "MMM-CustomMQTTBridge",
+			position: "top_right",
+			config: {
+				broker: "mqtt://localhost:1883",
+				topics: ["magicmirror/test", "sensors/#"]
+			}
+		},
+		// {  // or use example with encryption
+		// 	module: 'MMM-MQTTbridge',
+		// 	disabled: false,
+		// 	config: {
+		// 		mqttServer: "mqtt://:@localhost:1883",
+		// 		mqttConfig:
+		// 		{
+		// 			listenMqtt: true,
+		// 			interval: 300000,
+		// 		},
+		// 		notiConfig:
+		// 		{
+		// 			listenNoti: true,
+		// 			ignoreNotiId: ["CLOCK_MINUTE", "NEWS_FEED"],
+		// 			ignoreNotiSender: ["system", "NEWS_FEED"],
+		// 		},
+		// 	// set "NOTIFICATIONS -> MQTT" dictionary at /dict/notiDictionary.js
+		// 	// set "MQTT -> NOTIFICATIONS" dictionary at /dict/mqttDictionary.js
+		// 	},
+		// },
 		// {
 		// 	module: 'MMM-Template',
 		// 	position: 'lower_third',
