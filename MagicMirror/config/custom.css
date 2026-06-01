@@ -20,12 +20,19 @@
   --font-size: 20px;
   --font-size-small: 0.75rem;
 
-  --gap-body-top: 60px;
+  /* --gap-body-top: 60px;
   --gap-body-right: 60px;
   --gap-body-bottom: 60px;
   --gap-body-left: 60px;
 
-  --gap-modules: 30px;
+  --gap-modules: 30px; */
+
+  --gap-body-top: 2vh;
+  --gap-body-right: 2vw;
+  --gap-body-bottom: 2vh;
+  --gap-body-left: 2vw;
+
+  --gap-modules: 1vh;
 }
 
 @font-face {
@@ -42,4 +49,40 @@ html, body {
 body {
   background-color: black !important;
   color: white !important;
+}
+
+.region.top.center {
+    width: 95vw;
+}
+
+.clock .date {
+  font-size: 4vh;
+  opacity: 1;
+  color: #fff;
+  font-family: "Tiresias" !important;
+}
+
+.clock .time {
+  font-size: 5vh;
+  opacity: 1;
+  font-family: "Tiresias" !important;
+}
+
+.region.top.center .container {
+    display: flex;
+    flex-direction: column;
+    height: 95vh;
+}
+
+.module.clock {
+    flex: 1;
+}
+
+.module.MMM-SensorUI {
+    flex: 8;
+    height: 100%;
+}
+
+.module.MMM-SensorUI .module-content {
+  height: 100%;
 }

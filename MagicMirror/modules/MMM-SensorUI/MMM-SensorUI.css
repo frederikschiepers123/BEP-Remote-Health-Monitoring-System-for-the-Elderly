@@ -1,7 +1,8 @@
 .sensorWrapper {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 2vh;
+  height: 100%;
   width: 100%;
 }
 
@@ -12,25 +13,26 @@
 .vitalWrapper,
 .envWrapper,
 .infoWrapper {
-  border-radius: 24px;
-  padding: 20px;
+  border-radius: 2vh;
+  padding: 2vh;
 }
-
-/* Different background colors */
 
 .vitalWrapper {
   /* background: rgba(180, 40, 40, 0.25); */
   background: rgba(0, 20, 46, 1);
+  flex: 3;
 }
 
 .envWrapper {
   /* background: rgba(40, 120, 180, 0.25); */
   background: rgba(0, 20, 46, 1);
+  flex: 3;
 }
 
 .infoWrapper {
   /* background: rgba(80, 80, 80, 0.25); */
   background: rgba(0, 74, 173, 1);
+  flex: 2;
 }
 
 /*
@@ -42,13 +44,13 @@
   display: flex;
   justify-content: space-evenly;
   align-items: center;
-  gap: 20px;
+  /* gap: 20px; */
 }
 
 .infoWrapper {
   display: flex;
   align-items: center;
-  gap: 20px;
+  /* gap: 20px; */
 }
 
 /*
@@ -70,8 +72,8 @@
  */
 
 .statusMainIcon {
-  font-size: 56px;
-  margin-bottom: 10px;
+  font-size: 5vh;
+  /* margin-bottom: 10px; */
 }
 
 /*
@@ -97,17 +99,17 @@
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  /* gap: 12px; */
 }
 
 .statusNumber {
-  font-size: 72px;
+  font-size: 7vh;
   font-weight: bold;
   line-height: 1;
 }
 
 .statusUnit {
-  font-size: 32px;
+  font-size: 3vh;
   font-weight: 600;
   line-height: 1.1;
 
@@ -121,7 +123,7 @@
  */
 
 .statusIndicator {
-  font-size: 34px;
+  font-size: 3vh;
 }
 
 .statusGreen {
@@ -141,12 +143,12 @@
  */
 
 .infoIcon {
-  font-size: 56px;
+  font-size: 5vh;
 }
 
 .infoText {
   flex: 1;
-  font-size: 28px;
+  font-size: 3vh;
   line-height: 1.4;
 }
 
@@ -163,13 +165,17 @@
 
 .measuringIcons {
   display: flex;
-  gap: 40px;
-  font-size: 58px;
-  margin-bottom: 20px;
+  /* gap: 40px; */
+  width: 100%;
+
+  justify-content: space-evenly;
+  align-items: center;
+  font-size: 6vh;
+  /* margin-bottom: 20px; */
 }
 
 .measuringText {
-  font-size: 38px;
+  font-size: 4vh;
   font-weight: bold;
   text-align: center;
 }
@@ -181,7 +187,7 @@
 }
 
 .statusTextOnly {
-  font-size: 42px;
+  font-size: 4vh;
   font-weight: 700;
   text-transform: capitalize;
   text-align: center;
