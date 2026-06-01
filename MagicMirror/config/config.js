@@ -51,11 +51,11 @@ let config = {
 		},
 		{
 			module: "MMM-SensorUI",
-			position: "bottom_center"
+			position: "top_center"
 		},
 		{
 			module: "MMM-CustomMQTTBridge",
-			position: "top_right",
+			// position: "top_right",
 			config: {
 				broker: "mqtt://localhost:1883",
 				topics: ["magicmirror/test", "sensors/#"]
