@@ -23,15 +23,23 @@ The Android tablet serves **two roles simultaneously**:
 1. **MQTT broker** — Mosquitto running under Termux, listening on `:8883` for
    mTLS connections from this firmware and from the Radxa.
 2. **MagicMirror² client** — the smart-mirror UI behind the two-way acrylic.
-   MagicMirror² subscribes to UI-safe presentation topics that are published by
-   the **Radxa**, not by this firmware (see §9.5). The firmware's MQTT contract
-   knows nothing about the mirror UI; raw vitals never reach MagicMirror²
-   directly.
+   MM² runs a custom module, `MMM-SensorUI`, that **subscribes directly to
+   the firmware's raw `rmms/<uuid>/...` topics on the tablet's own broker**
+   and renders per-sensor tiles. The threshold logic (mapping numeric values
+   to severity colors red/orange/yellow/green) lives in JavaScript inside
+   that module — there is no intermediate "tablet UI service" process and
+   no `rmms/ui/...` topic namespace (see §9.5). The mirror is a distinct
+   MQTT identity with its own cert; it is not the device, the Radxa, or an
+   operator. The firmware's MQTT contract knows nothing about the mirror UI;
+   raw topics are the contract, and the mirror is one of several
+   subscribers.
 
 This repository implements **only** the sensor-module firmware. The tablet
-broker, the tablet's MagicMirror² configuration, the USB-MQTT bridge, the
-Radxa aggregation service, and the FHIR translator live in separate
-repositories.
+broker configuration, the MagicMirror² installation and `MMM-SensorUI`
+module, the USB-MQTT bridge, the Radxa aggregation service, and the FHIR
+translator live in separate repositories (the MagicMirror² tree currently
+sits under `MagicMirror/` in this repo as a temporary convenience; it
+should be factored out before v1 is shipped).
 
 A previous BAP group built a working MicroPython firmware on a Lilygo TQ-T Pro
 (ESP32-S3). **That code is reference material only, not a starting point.** Treat
@@ -64,10 +72,20 @@ enrollment phase in this firmware — devices are born with their identity.
 
 ### 2.1 Transports
 
+> **v1 scope (current phase):** the **USB-CDC data link to the tablet is
+> deferred**. The firmware connects to the tablet broker **over Wi-Fi only** for
+> now; the USB-CDC transport, the tablet-side USB-MQTT bridge, and the
+> USB↔Wi-Fi failover FSM (§2.2) are a later-phase addition. The `transport_usb`
+> component and `tusb_config.h`'s 2-CDC layout remain in the tree but are not
+> wired into the active path yet. The end-state design below (USB primary,
+> Wi-Fi failover, uniform mTLS on both) is unchanged as the target; only the
+> *order of implementation* is. Developer logging in this phase uses a separate
+> USB-serial console (§12), which is **not** the tablet data link.
+
 | Path        | Use         | Encryption                                  | Notes                                                       |
 | ----------- | ----------- | ------------------------------------------- | ----------------------------------------------------------- |
-| **USB-CDC** | **Primary** | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Direct cable, MCU ↔ tablet, identical cert chain to Wi-Fi   |
-| **Wi-Fi**   | Failover    | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Same LAN as tablet, used only if USB enumeration fails      |
+| **USB-CDC** | Primary *(target; deferred in v1)* | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Direct cable, MCU ↔ tablet, identical cert chain to Wi-Fi   |
+| **Wi-Fi**   | Failover *(sole transport in v1)* | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Same LAN as tablet                                          |
 
 **Encryption is uniform across both transports.** The MQTT client and the TLS
 context know nothing about which transport is carrying their bytes. There is
@@ -174,6 +192,7 @@ The firmware does **not** own:
 | Block            | Part                   | Bus  | Notes                                          |
 | ---------------- | ---------------------- | ---- | ---------------------------------------------- |
 | Environment      | Bosch BME280           | I²C0 | Temp + humidity + pressure                     |
+| Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BME280 `0x76/0x77`). On combo breakouts paired with AHT21, the AHT21 is **not used** — BME280 supplies temp/hum for compensation if needed. |
 | mmWave radar (A) | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary frame protocol (`0x53 0x59` header) |
 | mmWave radar (B) | **DFRobot C1001** (24 GHz, presence + vitals) | UART | 5 V mains, DFRobot AT-style command set |
 | Light            | GL5516 LDR             | ADC  | Voltage divider, single-ended sample           |
@@ -280,6 +299,7 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 ├── components/
 │   ├── board/                    # board_pico2wh.h, pin map, hardware init
 │   ├── sensor_env/               # BME280 driver + env_task
+│   ├── sensor_air/               # ENS160 driver + air_task
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
 │   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver
 │   │   ├── radar_c1001.c         # DFRobot C1001 driver
@@ -329,6 +349,7 @@ FreeRTOS SMP, both M33 cores enabled, tickless idle off (we are always mains-pow
 | ----------------- | ------------- | -------- | ------ | ------------------------------------ |
 | `app_main`        | Any           | 2        | 2 KB   | Watchdog kick, supervisor            |
 | `env_task`        | Any           | 3        | 2 KB   | Polls BME280 at 1 Hz                 |
+| `air_task`        | Any           | 3        | 2 KB   | Polls ENS160 at 1 Hz (warm-up gated) |
 | `radar_task`      | Core 1        | 4        | 4 KB   | UART RX, frame parsing               |
 | `light_task`      | Any           | 3        | 1 KB   | ADC at 1 Hz                          |
 | `ui_task`         | Core 0        | 2        | 4 KB   | OLED redraw on button or 1 Hz        |
@@ -339,8 +360,8 @@ Priorities: higher numeric = higher priority. The transport selector outranks
 everything because losing the link is the only failure mode that matters.
 
 ### 7.2 IPC
-- One **FreeRTOS queue per producer→transport edge**, named `q_env`, `q_radar`,
-  `q_light`.
+- One **FreeRTOS queue per producer→transport edge**, named `q_env`, `q_air`,
+  `q_radar`, `q_light`.
 - No global mutable state. Period. If two tasks need to share a value, it goes
   through a queue or a mutex-protected struct.
 - Inter-core comms use FreeRTOS primitives, **not** the raw `multicore_fifo`.
@@ -440,12 +461,27 @@ from registration. **No spaces, no Dutch diacritics, no PII in topics.**
 
 | Topic                              | Direction | Payload         | QoS |
 | ---------------------------------- | --------- | --------------- | --- |
-| `rmms/<uuid>/env`                  | pub       | JSON env sample | 1   |
+| `rmms/<uuid>/env`                  | pub       | JSON env sample (BME280) | 1 |
+| `rmms/<uuid>/air`                  | pub       | JSON air-quality sample (ENS160) | 1 |
 | `rmms/<uuid>/radar`                | pub       | JSON radar sample (raw + quality flag) | 1 |
 | `rmms/<uuid>/light`                | pub       | JSON light sample | 1 |
 | `rmms/<uuid>/status`               | pub (retained) | `"online"`/`"offline"` | 1 |
 | `rmms/<uuid>/cmd`                  | sub       | JSON command    | 1   |
 | `rmms/<uuid>/log`                  | pub       | text log line   | 0   |
+
+**Downlink topics** that live in the per-device tree but are **not** handled
+by the firmware (it neither publishes nor subscribes to them — they exist
+because the per-device tree is the natural place for per-device data flowing
+toward consumers on that device's network, in particular the mirror):
+
+| Topic                | Publisher                                              | Subscriber | Payload |
+| -------------------- | ------------------------------------------------------ | ---------- | ------- |
+| `rmms/<uuid>/info`   | operator cert (PoC: laptop; production: Radxa relay)    | mirror     | `{"text":"...","wall_ms":...}` |
+| `rmms/<uuid>/screen` | operator cert (PoC: laptop; production: Radxa relay)    | mirror     | `{"page":1..4,"wall_ms":...}` |
+
+The firmware **never** publishes to these, **never** subscribes to them, and
+**must not** parse them. They are documented here so the topic tree is fully
+described in one place.
 
 ### 9.2 Payload format
 
@@ -505,6 +541,21 @@ firmware never silently drops samples.
 ```json
 {"temp_c":21.500,"hum_pct":55.000,"pres_hpa":1013.250}
 ```
+
+**air** (`rmms/<uuid>/air`):
+```json
+{"co2_ppm":600,"tvoc_ppb":300,"aqi":2}
+```
+- `co2_ppm` — ENS160's equivalent CO₂ estimate, integer ppm.
+- `tvoc_ppb` — total volatile organic compound estimate, integer ppb.
+- `aqi` — ENS160's UBA-style air quality index, integer 1–5
+  (1=excellent, 2=good, 3=moderate, 4=poor, 5=unhealthy).
+
+The ENS160's outputs are coupled (TVOC is the raw measurement; eCO₂ and AQI
+are computed by the chip from TVOC + the optional temp/hum compensation
+written via I²C). The driver writes BME280's last temp/hum to the ENS160
+compensation registers every cycle. The chip needs an undocumented warm-up
+period (~5–10 min) after power-up; readings during that window have `q=2`.
 
 **radar** (`rmms/<uuid>/radar`):
 ```json
@@ -612,42 +663,83 @@ and explaining what threat model it addresses. The audit's findings about the
 previous protocol (`docs/technical-audit.md` §D.1–D.2) are the baseline
 counter-argument; the new requirement must materially defeat them.
 
-### 9.5 UI-presentation topic boundary
+### 9.5 Mirror UI boundary
 
-The firmware publishes raw vitals to `rmms/<uuid>/...` in JSON (per §9.2). The
-**Radxa Dragon Q6A** subscribes to these, runs aggregation and clinical-logic
-processing, and republishes a separate set of UI-safe topics for MagicMirror²
-consumption. Both legs are JSON; the Radxa's job is **content** transformation
-(raw values → qualitative summaries), not format conversion.
+MagicMirror² runs on the tablet and **subscribes directly to the firmware's
+raw `rmms/<uuid>/...` topics**. The threshold logic — mapping numeric values
+to severity colors `green` / `yellow` / `orange` / `red` — lives in
+JavaScript inside a custom MM² module, `MMM-SensorUI`, that consumes those
+topics via an MQTT bridge module (currently `MMM-CustomMQTTBridge`, a
+project-internal bridge that subscribes to the broker and forwards messages
+to other MM² modules — the choice is mirror-side and may change without
+firmware impact). There is no intermediate "tablet UI service" process,
+no `rmms/ui/...` topic namespace, and no JSON translation layer between
+firmware and mirror.
 
 ```
-firmware  ──JSON──►  rmms/<uuid>/env             ──►  Radxa subscribes
-firmware  ──JSON──►  rmms/<uuid>/radar           ──►  Radxa subscribes
-firmware  ──JSON──►  rmms/<uuid>/light           ──►  Radxa subscribes
-                                                       │
-                                                       ▼
-                                            Radxa aggregates,
-                                            applies thresholds,
-                                            redacts/qualifies for UI
-                                                       │
-                                                       ▼
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/presence     ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/wellness     ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/ambient      ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/heart_rate   ◄── Radxa publishes
-MagicMirror² ◄──JSON──── rmms/ui/<uuid>/temperature  ◄── Radxa publishes
+firmware ──JSON──►  rmms/<uuid>/env    ──┐
+firmware ──JSON──►  rmms/<uuid>/air    ──┤──►  tablet broker (Mosquitto)  ──┐
+firmware ──JSON──►  rmms/<uuid>/radar  ──┤                                  │
+firmware ──JSON──►  rmms/<uuid>/light  ──┘                                  │
+                                                                            │
+                       (the Radxa is also a subscriber here for FHIR — §9.6)│
+                                                                            ▼
+                                                   MagicMirror² on tablet:
+                                                   MQTT bridge → MMM-SensorUI
+                                                   • parse raw JSON
+                                                   • apply per-tile severity
+                                                     thresholds in JS
+                                                   • render numeric value
+                                                     + colored check sign
+
+operator ──JSON──► rmms/<uuid>/info     ──►  broker  ──► MMM-SensorUI (text tile)
+operator ──JSON──► rmms/<uuid>/screen   ──►  broker  ──► MMM-SensorUI (page select)
 ```
+
+**Per-tile rendering rules:**
+
+| Tile | Source field(s) | Display |
+|---|---|---|
+| Heart rate | `radar.v.heart_bpm` | numeric BPM + severity check |
+| Breath rate | `radar.v.breath_bpm` | numeric RPM + severity check |
+| Temperature | `env.v.temp_c` | numeric °C + severity check |
+| Humidity | `env.v.hum_pct` | numeric % + severity check |
+| Air quality | `air.v.aqi` (1–5) | severity check only (no number) |
+| Info | `info.v.text` | text message panel |
+| Screen | `screen.v.page` | switches between configured layouts (1–4) |
+
+The four severity strings are literal: `"green"` / `"yellow"` / `"orange"`
+/ `"red"`. MMM-SensorUI maps them to CSS classes directly; there is no
+abstraction layer. Threshold ranges live in `MMM-SensorUI.js` with comments
+citing the source (WHO, AHA, ASHRAE) per range. Clinical advisor sign-off
+is required before any deployment beyond the project review.
+
+**Mirror identity:** the mirror is a distinct MQTT client with its own
+cert (CN format `mirror-<short-id>`), issued by the project CA by
+`scripts/provision_ca.sh` alongside the device cert. The Mosquitto ACL
+grants the mirror role `topic read rmms/+/+` (read everything in the
+device-rooted tree). The mirror does not publish sensor topics.
+
+**Operator identity:** the PoC laptop (and, eventually, the Radxa relay
+for hospital-sourced messages) uses an `operator-<short-id>` cert with
+ACL `topic write rmms/+/info` and `topic write rmms/+/screen`. Nothing
+else.
 
 **Rules:**
-- The firmware **never publishes to `rmms/ui/...`**. That namespace is owned by
-  the Radxa.
-- Heart rate (`heart_bpm`) and temperature (`temp_c`) are republished as exact
-  numeric values on `rmms/ui/<uuid>/heart_rate` and `rmms/ui/<uuid>/temperature`
-  respectively. All other raw vitals (breath rate, humidity, pressure, lux,
-  distance) remain qualitative only. This is a deliberate exception to the
-  original no-numbers UX rule, made by the project team.
-- If MagicMirror² needs anything that the Radxa is not currently publishing,
-  the fix lives in the Radxa repo, not this one.
+- The firmware publishes **only** the raw topics listed in §9.1
+  (`env`, `air`, `radar`, `light`, `status`, `log`). It does not publish
+  `info`, `screen`, or anything in a `ui` namespace (none exists).
+- The firmware subscribes **only** to `rmms/<uuid>/cmd` (plus
+  `rmms/<uuid>/time/set` when §16 Q6 is resolved).
+- The Radxa never touches the mirror UI. Its v1 jobs are raw-vitals
+  aggregation, store-and-forward buffering, and FHIR translation
+  (§9.6); in deployment it will additionally relay hospital-sourced
+  messages onto the `info`/`screen` topics, but that path is not
+  exercised in this project's PoC (the laptop stands in).
+- If MM² needs a derived UI value that isn't a function of the raw
+  topics, the fix lives in `MMM-SensorUI.js` (compute it on the
+  mirror); it does **not** go in the firmware. New raw topics require
+  a sensor on the board.
 
 ### 9.6 FHIR contract (firmware ↔ Radxa data format)
 
@@ -677,7 +769,7 @@ context the Radxa already has. The mapping:
 
 | Sensor JSON field / topic | FHIR Observation field | Resolution |
 |---|---|---|
-| Topic `rmms/<uuid>/<sensor>` | `code.coding[]` (LOINC) | Radxa config table: `temp_c→8310-5`, `hum_pct→19736-7`, `pres_hpa→3140-1`, `heart_bpm→8867-4`, `breath_bpm→9279-1`, `presence→76689-9` |
+| Topic `rmms/<uuid>/<sensor>` | `code.coding[]` (LOINC) | Radxa config table: `temp_c→8310-5`, `hum_pct→19736-7`, `pres_hpa→3140-1`, `heart_bpm→8867-4`, `breath_bpm→9279-1`, `presence→76689-9`. Indoor air-quality fields (`co2_ppm`, `tvoc_ppb`, `aqi`) have no widely-adopted LOINC codes; the Radxa team picks codes (likely SNOMED or custom URN until standardized) when wiring the `/air` topic. |
 | `<uuid>` (from topic) | `device.reference` → `Device/<uuid>` | Radxa provisions the `Device` FHIR resource once at deployment |
 | (Radxa local DB) | `subject.reference` → `Patient/<id>` | Radxa holds the `device_uuid → patient_id` binding; never on the MCU |
 | `v.<field>` (sensor value) | `valueQuantity.value` + `unit` + `system` + `code` | Radxa applies UCUM mapping per sensor field |
@@ -747,6 +839,15 @@ system, not only the MCU.
   - `/certs/dev.key` — device ECDSA P-256 private key (DER).
   - `/certs/dev.crt` — device cert (DER), signed by the project CA.
   - `/certs/ca.der` — project CA cert (DER), identical across all devices.
+- Two **non-device** identities are also issued by the same CA via
+  `scripts/provision_ca.sh`, for consumers and operators of the topic tree
+  (the firmware never sees these — they live only on consuming hosts):
+  - **Mirror cert** (CN `mirror-<short-id>`): used by MagicMirror²'s MQTT
+    bridge module to subscribe to the device tree. Mosquitto ACL: `topic read rmms/+/+`.
+  - **Operator cert** (CN `operator-<short-id>`): used by the PoC laptop (and,
+    eventually, by the Radxa relay) to publish the downlink topics `info` and
+    `screen`. Mosquitto ACL: `topic write rmms/+/info`, `topic write rmms/+/screen`,
+    nothing else.
 - The same cert chain is presented on both USB-CDC and Wi-Fi paths. Mosquitto
   validates the device cert against the project CA. The device validates the
   Mosquitto server cert against the same CA (mutual auth, same trust anchor).
@@ -868,7 +969,13 @@ to change a device's identity.
 
 - `components/log` exposes `LOG_E / LOG_W / LOG_I / LOG_D / LOG_V` macros and a
   per-module tag.
-- Output routed to **CDC1**, not CDC0. CDC0 is data only.
+- **Target:** output routed to **CDC1**, not CDC0 (CDC0 is data only).
+  **v1 (current phase, USB tablet link deferred — §2.1):** logs go to a
+  standalone **USB-serial dev console** (`pico_stdio_usb`) that enumerates as a
+  plain COM port on the developer's PC. This is a debug aid only, separate from
+  the tablet data path; when the 2-CDC USB tablet link lands, logging moves to
+  CDC1 per the target design. A bring-up validation of this console lives at
+  `test/bringup/usb_console.c`.
 - Compile-time `LOG_LEVEL` filter. Default `LOG_LEVEL_INFO` for release,
   `LOG_LEVEL_DEBUG` for dev.
 - Critical errors also publish a single line to `rmms/<uuid>/log` (QoS 0,
@@ -975,6 +1082,10 @@ Do not skip ahead. Each step assumes the previous works.
 4. **littlefs mount** — read-modify-write a counter at `/state/boot_count.json`.
 5. **BME280** — env_task publishing JSON samples to a local debug sink (no
    MQTT yet). Validates the snprintf encoder pattern from §9.2.
+5b. **ENS160** — air_task publishing JSON samples. Writes BME280's last
+   temp/hum to ENS160 compensation registers each cycle. Confirm the
+   ~5–10 min warm-up: during it the driver reports `q=2` (degraded) and
+   the AQI sits at 0/1 until the gas heaters stabilise.
 6. **mbedTLS + stream_cdc** — TLS handshake over CDC0 against a host-side
    `openssl s_server` configured with the project CA. This validates the cert
    chain and the BIO callbacks before any MQTT code.
@@ -1017,15 +1128,19 @@ Resolve each, then strip the TODO.
    integration testing. Likely a small Python or Go service in the tablet repo.
    Needs to handle Android USB host permissions (`UsbManager.requestPermission`),
    Termux USB plugin, and Termux:Boot for auto-start.
-4. **MagicMirror² run mode.** How is MagicMirror² actually started on the
-   tablet — Termux + headless Node.js + Chrome kiosk to `localhost:8080`, a
-   pre-packaged Android wrapper app, or another approach? Affects the tablet
-   team's deliverables but not this firmware directly.
-5. **MMM-MQTT module choice and UI-topic schema.** What does the Radxa
-   actually need to publish for the chosen mirror module to consume? Owned by
-   the Radxa team, but blocks integration testing. The firmware does not care
-   what the schema looks like — it just must not be confused with the raw
-   topics in §9.1.
+4. ~~**MagicMirror² run mode.**~~ **Resolved.** Termux + Node.js running
+   `npm run server` (server-only mode, no Electron) on :8080; Chrome on the
+   tablet opens `http://localhost:8080` for the viewer. Auto-start via
+   Termux:Boot (`~/.termux/boot/start_magicmirror` → `scripts/tablet_start_magicmirror.sh`).
+   Launcher script restarts MM² on death with backoff. Production-grade
+   kiosk lock (URL-bar / status-bar hiding) is a separate, optional install
+   ("Fully Kiosk Browser" or similar) — not needed for v1 PoC.
+5. ~~**MMM-MQTT module choice.**~~ **Resolved** — the mirror team picked a
+   project-internal `MMM-CustomMQTTBridge` (lives in
+   `MagicMirror/modules/MMM-CustomMQTTBridge/`). The firmware does not care
+   which bridge the mirror uses; the bridge just needs to honour the mTLS
+   contract (mirror cert from §10.2) and forward the raw `rmms/+/...`
+   topics to `MMM-SensorUI`.
 6. **RTC source.** None on the Pico 2; either get time from the tablet during
    connect (custom MQTT topic, e.g. `rmms/<uuid>/time/set`, or out-of-band over
    CDC1), or accept that `wall_ms` is null until first sync. Pick one. The
@@ -1052,13 +1167,21 @@ Resolve each, then strip the TODO.
   the `radar_driver_t` interface, with selection via `/cfg/sensors.json`.
 - TLS scope: mTLS on both transports (USB-CDC and Wi-Fi), static cert chain.
 - Face recognition: descoped from v1 entirely (see §17).
-- **IR camera: dropped entirely from v1.** Sensor module now exposes only
-  environment + radar + light. No SPI sensor remains.
+- **IR camera: dropped entirely from v1.** No SPI sensor remains.
 - **Registration protocol:** dropped wholesale (audit findings + decision to
   use static factory-cert identity model — see §9.4).
 - **QR codes / camera-LED enrollment:** dropped wholesale.
-- **Tablet's UI role:** MagicMirror² subscribes to Radxa-published UI topics,
-  not to firmware topics (see §9.5).
+- **Air quality sensor added (§3.2):** ScioSense ENS160 over I²C0 supplies
+  eCO₂, TVOC, and UBA AQI (1–5). New raw topic `rmms/<uuid>/air` (§9.1, §9.2.2),
+  new `air_task` (§7.1), new `components/sensor_air/` (§6). Mirror displays it
+  as a qualitative tile with severity check (no number).
+- **Mirror UI architecture (replaces the earlier "tablet UI service" plan):**
+  MagicMirror² subscribes to the firmware's raw topics directly via an
+  MQTT bridge module (currently `MMM-CustomMQTTBridge`); threshold logic
+  lives in JavaScript inside the custom `MMM-SensorUI` module. The
+  `rmms/ui/...` namespace is retired entirely.
+  Mirror and operator identities are separate certs from the same project
+  CA (§10.2). See rewritten §9.5.
 - **FHIR contract:** firmware emits sensor JSON, Radxa emits FHIR JSON.
   Mapping locked in §9.6.
 - **Wire format choice:** JSON (RFC 8259), reversed from earlier CBOR
@@ -1083,7 +1206,8 @@ State these explicitly so reviewers stop asking:
   lives on the Radxa Dragon Q6A, which has a Qualcomm Hexagon NPU (12 TOPS)
   for that workload. The MCU is not in this pipeline at all.
 - **IR camera and any other image sensor** — no image sensor exists on the
-  v1 sensor module. The peripheral set is fixed: environment + radar + light + OLED.
+  v1 sensor module. The peripheral set is fixed: environment (BME280) +
+  air quality (ENS160) + radar + light + OLED.
 - Encrypted OTA.
 - On-device cert rotation, on-device CSR generation, on-device CA hosting.
 - HTTPS, REST, or any non-MQTT protocol on the device side.
@@ -1125,8 +1249,11 @@ When working in this repository:
 - **Do not invent MQTT topics.** §9.1 is the closed set.
 - **Do not invent commands.** §9.3 is the closed set; new commands need the
   Radxa team's sign-off.
-- **Do not publish to `rmms/ui/...` from this firmware.** That namespace is
-  owned by the Radxa (§9.5).
+- **Do not invent UI-presentation topics.** The mirror subscribes to raw
+  firmware topics directly and does its own thresholding in
+  `MMM-SensorUI.js` (§9.5). There is no `rmms/ui/...` namespace; do not
+  reintroduce one. New mirror-renderable values require either a new raw
+  topic (= new sensor) or a JS-side derivation, not a firmware republish.
 - **Do not stub or fake security primitives.** If a TLS feature is missing,
   surface it; do not write a no-op. The audit shows the previous group did
   exactly this (`sig = nonce`) — do not repeat it.

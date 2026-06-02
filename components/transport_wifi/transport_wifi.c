@@ -1,13 +1,17 @@
 #define LOG_TAG "WIFI"
-#include "transport_wifi.h"
 
-#include "log.h"
-#include "err.h"
-#include "storage.h"
-
+/* lwIP headers MUST precede the firmware's err.h: lwip/err.h declares ERR_OK /
+ * ERR_TIMEOUT as an enum, while board/err.h defines them as macros. Parsing the
+ * enum first lets the firmware macros harmlessly shadow the (unused-here) names.
+ * LWIP_ERR_T (lwipopts.h) makes both err_t typedefs identical. */
 #include "pico/cyw43_arch.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
+
+#include "transport_wifi.h"
+#include "log.h"
+#include "err.h"
+#include "storage.h"
 
 #include "FreeRTOS.h"
 #include "task.h"

@@ -7,11 +7,12 @@ target_link_libraries(transport_selector
         board
         log
         identity
+        tls_context   # transport_selector.h exposes stream_t from tls_context.h
     PRIVATE
         FreeRTOS-Kernel
         transport_usb
         transport_wifi
-        tls_context
         mqtt_client
+        tinyusb_device   # transport_selector.c probes CDC via tusb.h
         pico_stdlib
 )

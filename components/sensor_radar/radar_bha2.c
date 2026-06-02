@@ -6,6 +6,7 @@
 #include "err.h"
 
 #include "hardware/uart.h"
+#include "hardware/gpio.h"
 #include "pico/time.h"
 
 #include "FreeRTOS.h"

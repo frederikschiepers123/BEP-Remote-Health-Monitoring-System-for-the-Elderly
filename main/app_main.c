@@ -36,6 +36,30 @@
 
 Identity g_identity;
 
+/* ── FreeRTOS application hooks (required by FreeRTOSConfig.h) ────────────── */
+
+/* configCHECK_FOR_STACK_OVERFLOW == 2: called when a task overflows its stack.
+ * Unrecoverable — log a best-effort line and halt for the hardware watchdog. */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    (void)xTask;
+    LOG_E("STACK OVERFLOW in task '%s' — halting", pcTaskName ? pcTaskName : "?");
+    for (;;) {
+        tight_loop_contents();
+    }
+}
+
+/* configUSE_MALLOC_FAILED_HOOK == 1: called when pvPortMalloc fails. */
+void vApplicationMallocFailedHook(void);
+void vApplicationMallocFailedHook(void)
+{
+    LOG_E("FreeRTOS heap exhausted (malloc failed) — halting");
+    for (;;) {
+        tight_loop_contents();
+    }
+}
+
 /* ── Watchdog heartbeat table ────────────────────────────────────────────── */
 
 /*

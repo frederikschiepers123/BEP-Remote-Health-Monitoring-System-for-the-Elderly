@@ -2,7 +2,9 @@
 #define TUSB_CONFIG_H
 
 /* ── Controller ───────────────────────────────────────────────────────────── */
-#define CFG_TUSB_MCU            OPT_MCU_RP2350
+/* The bundled TinyUSB drives the RP2350 USB IP through its rp2040 device port
+ * and only defines OPT_MCU_RP2040 (there is no OPT_MCU_RP2350 token). */
+#define CFG_TUSB_MCU            OPT_MCU_RP2040
 
 /* ── RTOS ────────────────────────────────────────────────────────────────── */
 #define CFG_TUSB_OS             OPT_OS_FREERTOS

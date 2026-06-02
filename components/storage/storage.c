@@ -7,8 +7,12 @@
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+
+/* Longest path we accept, including the ".tmp" suffix used for atomic writes. */
+#define STORAGE_PATH_MAX        96
 
 /* ── littlefs flash backend ──────────────────────────────────────────────── */
 
@@ -114,16 +118,57 @@ err_t storage_read(const char *path, void *buf, size_t buf_size, size_t *len_out
     return ERR_OK;
 }
 
+/* Create every parent directory of `path` (mkdir -p style). Existing
+ * directories are not an error. The final path segment (the file) is left
+ * alone. Root always exists. */
+static err_t ensure_parent_dirs(const char *path) {
+    char tmp[STORAGE_PATH_MAX];
+    size_t len = strlen(path);
+    if (len + 1u > sizeof(tmp)) return ERR_INVALID_ARG;
+    memcpy(tmp, path, len + 1u);
+
+    for (char *p = tmp + 1; *p != '\0'; p++) {   /* skip the leading '/' */
+        if (*p == '/') {
+            *p = '\0';
+            int rc = lfs_mkdir(&lfs, tmp);
+            if (rc != LFS_ERR_OK && rc != LFS_ERR_EXIST) return ERR_FS;
+            *p = '/';
+        }
+    }
+    return ERR_OK;
+}
+
+/* Atomic write (CLAUDE.md §11.2): write to "<path>.tmp", then rename over the
+ * target. lfs_rename is atomic and lfs_file_close flushes, so a power loss
+ * mid-write leaves the previous file intact rather than a truncated one. This
+ * is the single write path used everywhere — §11.2 names it storage_write_atomic
+ * but making storage_write itself atomic avoids churning every caller. */
 err_t storage_write(const char *path, const void *buf, size_t len) {
+    err_t e = ensure_parent_dirs(path);
+    if (e != ERR_OK) return e;
+
+    char tmp_path[STORAGE_PATH_MAX];
+    int np = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (np < 0 || (size_t)np >= sizeof(tmp_path)) return ERR_INVALID_ARG;
+
     lfs_file_t f;
-    int rc = lfs_file_open(&lfs, &f, path,
+    int rc = lfs_file_open(&lfs, &f, tmp_path,
                             LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
     if (rc != LFS_ERR_OK) return ERR_FS;
 
     lfs_ssize_t n = lfs_file_write(&lfs, &f, buf, (lfs_size_t)len);
-    lfs_file_close(&lfs, &f);
+    rc = lfs_file_close(&lfs, &f);
+    if (n != (lfs_ssize_t)len || rc != LFS_ERR_OK) {
+        (void)lfs_remove(&lfs, tmp_path);
+        return ERR_FS;
+    }
 
-    return (n == (lfs_ssize_t)len) ? ERR_OK : ERR_FS;
+    rc = lfs_rename(&lfs, tmp_path, path);
+    if (rc != LFS_ERR_OK) {
+        (void)lfs_remove(&lfs, tmp_path);
+        return ERR_FS;
+    }
+    return ERR_OK;
 }
 
 err_t storage_remove(const char *path) {
@@ -135,4 +180,50 @@ err_t storage_remove(const char *path) {
 bool storage_exists(const char *path) {
     struct lfs_info info;
     return lfs_stat(&lfs, path, &info) == LFS_ERR_OK;
+}
+
+/* Recursively list `path`. Depth-bounded; the §11 layout is only one level
+ * deep, so 4 is generous. Each frame holds an lfs_info (~256 B), so this is a
+ * debug-only helper — call it from a context with ample stack. */
+static void dump_dir(const char *path, int depth) {
+    if (depth > 4) return;
+
+    lfs_dir_t dir;
+    int rc = lfs_dir_open(&lfs, &dir, path);
+    if (rc != LFS_ERR_OK) {
+        LOG_W("dump: cannot open %s (%d)", path, rc);
+        return;
+    }
+
+    struct lfs_info info;
+    while (lfs_dir_read(&lfs, &dir, &info) > 0) {
+        if (strcmp(info.name, ".") == 0 || strcmp(info.name, "..") == 0) {
+            continue;
+        }
+        char child[STORAGE_PATH_MAX];
+        int np = (strcmp(path, "/") == 0)
+                     ? snprintf(child, sizeof(child), "/%s", info.name)
+                     : snprintf(child, sizeof(child), "%s/%s", path, info.name);
+        if (np < 0 || (size_t)np >= sizeof(child)) {
+            LOG_W("dump: path too long under %s", path);
+            continue;
+        }
+        if (info.type == LFS_TYPE_DIR) {
+            LOG_I("  %*s%s/", depth * 2, "", info.name);
+            dump_dir(child, depth + 1);
+        } else {
+            LOG_I("  %*s%s  (%lu bytes)", depth * 2, "", info.name,
+                  (unsigned long)info.size);
+        }
+    }
+    lfs_dir_close(&lfs, &dir);
+}
+
+void storage_dump(void) {
+    if (!mounted) {
+        LOG_W("dump: filesystem not mounted");
+        return;
+    }
+    LOG_I("filesystem tree (/ = top of the 256 KB littlefs region):");
+    dump_dir("/", 0);
 }

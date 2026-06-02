@@ -1,14 +1,18 @@
 #define LOG_TAG "TCP"
-#include "stream_tcp.h"
 
-#include "log.h"
-#include "err.h"
-#include "tls_context.h"
-
+/* lwIP headers MUST precede the firmware's err.h: lwip/err.h declares ERR_OK /
+ * ERR_TIMEOUT as an enum, while board/err.h defines them as macros. Parsing the
+ * enum first lets the firmware macros harmlessly shadow the (unused-here) names.
+ * LWIP_ERR_T (lwipopts.h) makes both err_t typedefs identical. */
 /* lwIP POSIX-socket API (NO_SYS=0, FreeRTOS integration). */
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/errno.h"
+
+#include "stream_tcp.h"
+#include "log.h"
+#include "err.h"
+#include "tls_context.h"
 
 #include <string.h>
 #include <stdint.h>

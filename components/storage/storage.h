@@ -7,6 +7,7 @@
  * No direct littlefs calls outside components/storage/. */
 
 #include "err.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -26,5 +27,9 @@ err_t storage_remove(const char *path);
 
 /* Check whether path exists. */
 bool  storage_exists(const char *path);
+
+/* Debug: recursively print the filesystem tree (path, type, size) via the log,
+ * for bring-up and on-device incident inspection over the serial console. */
+void  storage_dump(void);
 
 #endif /* STORAGE_H */

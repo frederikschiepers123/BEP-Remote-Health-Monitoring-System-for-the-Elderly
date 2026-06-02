@@ -11,6 +11,15 @@
 #define configUSE_CORE_AFFINITY                 1
 #define configRUN_MULTIPLE_PRIORITIES           1
 #define configUSE_TASK_PREEMPTION_DISABLE       0
+#define configUSE_PASSIVE_IDLE_HOOK             0   /* required when SMP is enabled */
+
+/* ── ARMv8-M port (RP2350 Cortex-M33, No-TrustZone) ──────────────────────── */
+/* Values mandated by the RP2350_ARM_NTZ port: single privilege level, secure
+ * state only, no MPU, no TrustZone. FPU enabled (we use floating point). */
+#define configENABLE_FPU                        1
+#define configENABLE_MPU                        0
+#define configENABLE_TRUSTZONE                  0
+#define configRUN_FREERTOS_SECURE_ONLY          1
 
 /* ── Tick ─────────────────────────────────────────────────────────────────── */
 #define configCPU_CLOCK_HZ                      150000000UL
@@ -35,6 +44,9 @@
 /* ── Memory ───────────────────────────────────────────────────────────────── */
 #define configSUPPORT_STATIC_ALLOCATION         1
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
+/* Let the kernel supply the static buffers for the idle/passive-idle/timer
+ * tasks, so the application need not provide vApplicationGet*TaskMemory(). */
+#define configKERNEL_PROVIDED_STATIC_MEMORY     1
 #define configTOTAL_HEAP_SIZE                   (192 * 1024)   /* 192 KB */
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
@@ -79,6 +91,7 @@
 #define INCLUDE_xTimerPendFunctionCall          1
 #define INCLUDE_xTaskAbortDelay                 1
 #define INCLUDE_xTaskGetTaskHandle              1
+#define INCLUDE_xSemaphoreGetMutexHolder        1   /* used by pico_async_context */
 
 /* ── Interrupt priority (Cortex-M33) ─────────────────────────────────────── */
 #ifdef __NVIC_PRIO_BITS

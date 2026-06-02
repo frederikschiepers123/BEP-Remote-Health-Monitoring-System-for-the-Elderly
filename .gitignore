@@ -17,6 +17,10 @@ build/
 creds/
 certs/
 /cfg/
+# provisioning output (broker bundle + per-device bundles + mirror + operator)
+/out/
+# belt-and-braces if the project CA dir ever lands inside the repo
+/rmms-ca/
 
 # IDE / OS
 .vscode/settings.json

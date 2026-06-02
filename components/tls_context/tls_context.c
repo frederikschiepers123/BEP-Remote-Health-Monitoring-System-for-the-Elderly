@@ -233,9 +233,13 @@ err_t tls_context_init(TlsContext *ctx, const Identity *id)
     mbedtls_ssl_conf_session_tickets(&ctx->conf,
                                       MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
 
-    /* Disable renegotiation — tear down and re-establish instead. */
+    /* Disable renegotiation — tear down and re-establish instead. When
+     * MBEDTLS_SSL_RENEGOTIATION is not compiled in, renegotiation is already
+     * off and the config helper does not exist, so the call is guarded out. */
+#if defined(MBEDTLS_SSL_RENEGOTIATION)
     mbedtls_ssl_conf_renegotiation(&ctx->conf,
                                     MBEDTLS_SSL_RENEGOTIATION_DISABLED);
+#endif
 
     /* Set up the SSL context with this config. */
     rc = mbedtls_ssl_setup(&ctx->ssl, &ctx->conf);

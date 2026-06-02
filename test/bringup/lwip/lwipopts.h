@@ -1,19 +1,27 @@
+/* lwipopts.h for the bringup_wifi target ONLY (CLAUDE.md §15 step 13).
+ *
+ * The real firmware uses pico_cyw43_arch_lwip_sys_freertos with the root
+ * lwipopts.h (NO_SYS=0, sockets, core-locking). For this bring-up we use
+ * pico_cyw43_arch_lwip_threadsafe_background instead — see the comment in
+ * test/bringup/CMakeLists.txt for why. That arch wraps pico_lwip_nosys, which
+ * needs NO_SYS=1 (no sys_arch.h is provided), and the socket / netconn / core-
+ * locking layers must therefore be disabled.
+ *
+ * This file is on the bringup_wifi target's include path *before* the repo
+ * root, so it shadows the root lwipopts.h for this target only. No other
+ * target sees it.
+ */
 #ifndef LWIPOPTS_H
 #define LWIPOPTS_H
 
-/* ── OS integration ───────────────────────────────────────────────────────── */
-#define NO_SYS                          0   /* FreeRTOS mode */
-#define LWIP_SOCKET                     1
+/* ── OS integration (bring-up: no FreeRTOS in the lwIP path) ─────────────── */
+#define NO_SYS                          1
+#define LWIP_SOCKET                     0
 #define LWIP_NETCONN                    0
+#define LWIP_TCPIP_CORE_LOCKING         0
 
-/* Make lwIP's err_t identical to the firmware's err_t (board/err.h, int32_t),
- * so the two typedefs coexist in the Wi-Fi transport TUs that include both.
- * Must be a signed type. */
+/* Match the firmware's err_t (board/err.h, int32_t) so the typedefs coexist. */
 #define LWIP_ERR_T                      int32_t
-
-/* The toolchain's <sys/time.h> already defines struct timeval; use it instead
- * of lwIP's private definition (avoids a redefinition in lwip/sockets.h). */
-#define LWIP_TIMEVAL_PRIVATE            0
 
 /* ── Memory ───────────────────────────────────────────────────────────────── */
 #define MEM_LIBC_MALLOC                 0
@@ -27,6 +35,11 @@
 #define MEMP_NUM_UDP_PCB                4
 #define PBUF_POOL_SIZE                  24
 #define PBUF_POOL_BUFSIZE               1500
+
+/* The default (~8) is too small once altcp_tls (mbedTLS) + lwIP MQTT raw API +
+ * cyw43 threadsafe_background poller all run simultaneously. Without the bump
+ * lwIP panics with "sys_timeout: pool MEMP_SYS_TIMEOUT is empty" mid-handshake. */
+#define MEMP_NUM_SYS_TIMEOUT            24
 
 /* ── TCP ──────────────────────────────────────────────────────────────────── */
 #define LWIP_TCP                        1
@@ -47,7 +60,7 @@
 #define LWIP_MDNS_RESPONDER             1
 #define MDNS_MAX_SERVICES               2
 
-/* ── TLS / mbedTLS ────────────────────────────────────────────────────────── */
+/* ── TLS / mbedTLS (linked but not exercised by this bring-up) ───────────── */
 #define LWIP_ALTCP                      1
 #define LWIP_ALTCP_TLS                  1
 #define LWIP_ALTCP_TLS_MBEDTLS          1
@@ -60,17 +73,8 @@
 #define CHECKSUM_CHECK_UDP              1
 #define CHECKSUM_CHECK_TCP              1
 
-/* ── Debug (disabled in release; override per-component as needed) ────────── */
+/* ── Debug ────────────────────────────────────────────────────────────────── */
 #define LWIP_DEBUG                      0
-#define TCP_DEBUG                       LWIP_DBG_OFF
-#define ETHARP_DEBUG                    LWIP_DBG_OFF
-#define PBUF_DEBUG                      LWIP_DBG_OFF
-#define IP_DEBUG                        LWIP_DBG_OFF
-#define TCPIP_DEBUG                     LWIP_DBG_OFF
-#define DHCP_DEBUG                      LWIP_DBG_OFF
-
-/* ── Thread safety ────────────────────────────────────────────────────────── */
-#define LWIP_TCPIP_CORE_LOCKING         1
 
 /* ── Miscellaneous ────────────────────────────────────────────────────────── */
 #define LWIP_NETIF_HOSTNAME             1
