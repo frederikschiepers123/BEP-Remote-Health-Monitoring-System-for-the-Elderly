@@ -28,9 +28,9 @@
   --gap-modules: 30px; */
 
   --gap-body-top: 2vh;
-  --gap-body-right: 2vw;
+  --gap-body-right: 1vw;
   --gap-body-bottom: 2vh;
-  --gap-body-left: 2vw;
+  --gap-body-left: 1vw;
 
   --gap-modules: 1vh;
 }
@@ -71,11 +71,12 @@ body {
 .region.top.center .container {
     display: flex;
     flex-direction: column;
-    height: 95vh;
+    height: 97vh;
 }
 
 .module.clock {
     flex: 1;
+    margin-bottom: 2vh;
 }
 
 .module.MMM-SensorUI {
