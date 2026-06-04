@@ -27,6 +27,7 @@
 #include "board_pico2wh.h"
 #include "bme280.h"
 #include "ens160.h"
+#include "sh1122.h"
 #include "err.h"
 
 #include "hardware/i2c.h"
@@ -56,6 +57,9 @@
 #ifndef SENSOR_AIR_ON
 #define SENSOR_AIR_ON   1
 #endif
+#ifndef OLED_ON
+#define OLED_ON         1
+#endif
 
 /* FreeRTOSConfig hooks. */
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
@@ -81,6 +85,20 @@ mbedtls_ms_time_t mbedtls_ms_time(void)
 /* ── MQTT state ─────────────────────────────────────────────────────────── */
 static mqtt_client_t *g_mqtt;
 static volatile bool g_mqtt_connected = false;
+
+#if OLED_ON
+/* ── OLED state ─────────────────────────────────────────────────────────── */
+static Sh1122 s_oled;
+static bool   s_oled_ok = false;
+static char   s_wifi_ip[16] = "----";
+/* Last samples shown on the OLED — copied from the publish-side encoders
+ * via the shadow vars below so the render task doesn't need to re-read I²C. */
+static volatile float    s_disp_temp = 0.0f, s_disp_hum = 0.0f, s_disp_pres = 0.0f;
+static volatile bool     s_disp_env_have = false;
+static volatile uint16_t s_disp_co2 = 0, s_disp_tvoc = 0;
+static volatile uint8_t  s_disp_aqi = 0, s_disp_air_q = 3;
+static volatile bool     s_disp_air_have = false;
+#endif
 
 static void mqtt_connect_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t status)
 {
@@ -163,6 +181,14 @@ static void publish_env_sample(void)
                (double)s.temp_c, (double)s.humidity_pct, (double)s.pressure_hpa,
                (unsigned)s_env_seq);
     }
+#if OLED_ON
+    /* Update OLED shadow regardless of mqtt success — the display is local
+     * UX, not gated on the broker round-trip. */
+    s_disp_temp = s.temp_c;
+    s_disp_hum  = s.humidity_pct;
+    s_disp_pres = s.pressure_hpa;
+    s_disp_env_have = (q == 0);
+#endif
 }
 #endif /* SENSOR_ENV_ON */
 
@@ -228,6 +254,13 @@ static void publish_air_sample(void)
         printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u seq=%u\n",
                s.aqi, s.co2_ppm, s.tvoc_ppb, q, (unsigned)s_air_seq);
     }
+#if OLED_ON
+    s_disp_co2  = s.co2_ppm;
+    s_disp_tvoc = s.tvoc_ppb;
+    s_disp_aqi  = s.aqi;
+    s_disp_air_q = q;
+    s_disp_air_have = true;
+#endif
 }
 #endif /* SENSOR_AIR_ON */
 
@@ -297,6 +330,133 @@ static void mqtt_setup_and_connect(void)
 
 /* ── Main task ──────────────────────────────────────────────────────────── */
 
+#if OLED_ON
+/* ── OLED render task — independent loop that polls shadow state and
+ *    cycles through 4 status pages every 3 s. Runs at low priority so
+ *    sensor + MQTT work isn't delayed by I²C frame writes. ────────────── */
+
+static const char *aqi_str(uint8_t aqi)
+{
+    switch (aqi) {
+    case 1: return "EXCELLENT";
+    case 2: return "GOOD";
+    case 3: return "MODERATE";
+    case 4: return "POOR";
+    case 5: return "UNHEALTHY";
+    default: return "-";
+    }
+}
+
+static void oled_page_indicator(uint8_t n)
+{
+    char line[8]; snprintf(line, sizeof(line), "%u/4", (unsigned)n);
+    sh1122_draw_text(&s_oled, 240, 56, 1, line);
+}
+
+static void render_page_net(uint32_t uptime_s)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "NETWORK + BROKER");
+    char line[40];
+    snprintf(line, sizeof(line), "WIFI %s", s_wifi_ip);
+    sh1122_draw_text(&s_oled, 0, 18, 2, line);
+    snprintf(line, sizeof(line), "BROKER %s", BROKER_IP);
+    sh1122_draw_text(&s_oled, 0, 36, 2, line);
+    snprintf(line, sizeof(line), "MQTT %s  UP %lus",
+             g_mqtt_connected ? "OK" : "--", (unsigned long)uptime_s);
+    sh1122_draw_text(&s_oled, 0, 50, 1, line);
+    oled_page_indicator(1);
+}
+
+static void render_page_env(uint32_t pub_count)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "ENV  /env");
+    char line[40];
+    if (s_disp_env_have) {
+        snprintf(line, sizeof(line), "T %5.1f C", (double)s_disp_temp);
+        sh1122_draw_text(&s_oled, 0, 18, 2, line);
+        snprintf(line, sizeof(line), "H %5.1f %%", (double)s_disp_hum);
+        sh1122_draw_text(&s_oled, 0, 36, 2, line);
+        snprintf(line, sizeof(line), "P %6.1f HPA", (double)s_disp_pres);
+        sh1122_draw_text(&s_oled, 124, 18, 2, line);
+        snprintf(line, sizeof(line), "PUBLISHED %lu", (unsigned long)pub_count);
+        sh1122_draw_text(&s_oled, 124, 36, 1, line);
+    } else {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "WAITING FOR SAMPLE");
+    }
+    oled_page_indicator(2);
+}
+
+static void render_page_air(uint32_t pub_count)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "AIR  /air");
+    char line[40];
+    if (s_disp_air_have) {
+        if (s_disp_air_q == 0) {
+            snprintf(line, sizeof(line), "AQI %u (%s)", s_disp_aqi, aqi_str(s_disp_aqi));
+            sh1122_draw_text(&s_oled, 0, 18, 2, line);
+            snprintf(line, sizeof(line), "CO2 %u PPM", s_disp_co2);
+            sh1122_draw_text(&s_oled, 0, 36, 2, line);
+            snprintf(line, sizeof(line), "TVOC %u PPB", s_disp_tvoc);
+            sh1122_draw_text(&s_oled, 140, 36, 2, line);
+        } else {
+            snprintf(line, sizeof(line), "WARMING UP  q=%u", (unsigned)s_disp_air_q);
+            sh1122_draw_text(&s_oled, 0, 18, 2, line);
+            snprintf(line, sizeof(line), "CO2 %u  TVOC %u", s_disp_co2, s_disp_tvoc);
+            sh1122_draw_text(&s_oled, 0, 36, 2, line);
+        }
+        snprintf(line, sizeof(line), "PUBLISHED %lu", (unsigned long)pub_count);
+        sh1122_draw_text(&s_oled, 0, 56, 1, line);
+    } else {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "WAITING FOR SAMPLE");
+    }
+    oled_page_indicator(3);
+}
+
+static void render_page_build(void)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "BUILD INFO");
+    sh1122_draw_text(&s_oled, 0, 18, 2, "BOARD PICO 2 WH");
+    sh1122_draw_text(&s_oled, 0, 36, 2, "RP2350 / FREERTOS");
+    sh1122_draw_text(&s_oled, 0, 50, 1, "BRINGUP_SENSORS");
+    oled_page_indicator(4);
+}
+
+static void render_task(void *arg)
+{
+    (void)arg;
+    /* Wait until the sensors task has had a chance to init the OLED. */
+    while (!s_oled_ok) vTaskDelay(pdMS_TO_TICKS(200));
+
+    TickType_t boot_tick = xTaskGetTickCount();
+    TickType_t last_cycle = boot_tick;
+    uint8_t page = 0;
+
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
+            page = (page + 1) & 0x03U;
+            last_cycle = now;
+        }
+        uint32_t uptime_s = (uint32_t)((now - boot_tick) / configTICK_RATE_HZ);
+
+        switch (page) {
+        case 0: render_page_net(uptime_s); break;
+        case 1: render_page_env(s_env_seq); break;
+        case 2: render_page_air(s_air_seq); break;
+        case 3: render_page_build(); break;
+        default: render_page_net(uptime_s); break;
+        }
+        (void)sh1122_flush(&s_oled);
+
+        vTaskDelay(pdMS_TO_TICKS(300));   /* ~3 Hz refresh */
+    }
+}
+#endif /* OLED_ON */
+
 static void sensors_task(void *arg)
 {
     (void)arg;
@@ -323,6 +483,11 @@ static void sensors_task(void *arg)
     s_ens_ok = (ea == ERR_OK);
     printf("[bringup] ENS160 init %s (rc=%d)\n", s_ens_ok ? "OK" : "FAILED", (int)ea);
 #endif
+#if OLED_ON
+    err_t eo = sh1122_init(&s_oled, BOARD_I2C_INST, BOARD_OLED_ADDR);
+    s_oled_ok = (eo == ERR_OK);
+    printf("[bringup] SH1122 init %s (rc=%d)\n", s_oled_ok ? "OK" : "FAILED", (int)eo);
+#endif
 
     /* ── Wi-Fi + mTLS + MQTT ─────────────────────────────────────────── */
     if (WIFI_SSID[0] == '\0') {
@@ -344,6 +509,9 @@ static void sensors_task(void *arg)
     }
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     printf("[bringup] CONNECTED — IP = %s\n", ip ? ip4addr_ntoa(ip) : "(none)");
+#if OLED_ON
+    snprintf(s_wifi_ip, sizeof(s_wifi_ip), "%s", ip ? ip4addr_ntoa(ip) : "----");
+#endif
 
     mqtt_setup_and_connect();
 
@@ -371,6 +539,11 @@ int main(void)
     /* Same core-0 affinity as bringup_mqtt (sys_freertos cyw43 is not SMP-clean
      * with this pico-sdk rev; see memory project-cyw43-sys-freertos-hang). */
     xTaskCreateAffinitySet(sensors_task, "sensors", 8192, NULL, 2, 0x01, NULL);
+#if OLED_ON
+    /* OLED render runs at lower priority + core 0 so the sensor+MQTT task
+     * always pre-empts it. ~3 KB stack is enough for snprintf + sh1122. */
+    xTaskCreateAffinitySet(render_task,  "oled",    3072, NULL, 1, 0x01, NULL);
+#endif
     vTaskStartScheduler();
     for (;;) { tight_loop_contents(); }
 }
