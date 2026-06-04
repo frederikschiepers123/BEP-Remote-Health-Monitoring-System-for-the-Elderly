@@ -26,6 +26,7 @@
 
 #include "board_pico2wh.h"
 #include "bme280.h"
+#include "ens160.h"
 #include "err.h"
 
 #include "hardware/i2c.h"
@@ -51,6 +52,9 @@
  * (e.g. while bringing up another one). Default: all on. */
 #ifndef SENSOR_ENV_ON
 #define SENSOR_ENV_ON   1
+#endif
+#ifndef SENSOR_AIR_ON
+#define SENSOR_AIR_ON   1
 #endif
 
 /* FreeRTOSConfig hooks. */
@@ -99,6 +103,11 @@ static void mqtt_pub_cb(void *arg, err_t result)
 static Bme280 s_bme;
 static bool   s_bme_ok = false;
 static uint32_t s_env_seq = 0;
+#endif
+#if SENSOR_AIR_ON
+static Ens160 s_ens;
+static bool   s_ens_ok = false;
+static uint32_t s_air_seq = 0;
 #endif
 
 /* env_sample_encode follows the snprintf template in CLAUDE.md §9.2.
@@ -156,6 +165,71 @@ static void publish_env_sample(void)
     }
 }
 #endif /* SENSOR_ENV_ON */
+
+#if SENSOR_AIR_ON
+/* air JSON encoder per CLAUDE.md §9.2.2:
+ * {"ts_us":...,"wall_ms":...,"seq":...,"q":...,"v":{"co2_ppm":...,"tvoc_ppb":...,"aqi":...}} */
+static int air_sample_encode(char *buf, size_t cap,
+                             uint64_t ts_us, int64_t wall_ms,
+                             uint32_t seq, uint8_t q,
+                             uint16_t co2_ppm, uint16_t tvoc_ppb, uint8_t aqi)
+{
+    int n = snprintf(buf, cap,
+        "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%u,\"q\":%u,"
+        "\"v\":{\"co2_ppm\":%u,\"tvoc_ppb\":%u,\"aqi\":%u}}",
+        (unsigned long long)ts_us, (long long)wall_ms,
+        (unsigned)seq, (unsigned)q,
+        (unsigned)co2_ppm, (unsigned)tvoc_ppb, (unsigned)aqi);
+    return (n > 0 && (size_t)n < cap) ? n : -1;
+}
+
+static void publish_air_sample(void)
+{
+    if (!s_ens_ok) return;
+
+    Ens160Sample s;
+    uint8_t q = 0;
+    err_t e = ens160_read_sample(&s_ens, &s);
+    if (e != ERR_OK) {
+        printf("[bringup] ENS160 read failed rc=%d\n", (int)e);
+        q = 3;
+        s.aqi = 0; s.co2_ppm = 0; s.tvoc_ppb = 0;
+    } else {
+        /* Map ENS160 validity flag to the q field per CLAUDE.md §9.2.2:
+         *   normal       → 0 ok
+         *   warmup       → 2 degraded
+         *   init-startup → 2 degraded
+         *   invalid      → 3 invalid                                          */
+        Ens160Validity v = ens160_validity(s.status);
+        if      (v == ENS160_VALIDITY_NORMAL)  q = 0;
+        else if (v == ENS160_VALIDITY_INVALID) q = 3;
+        else                                   q = 2;
+    }
+
+    char topic[80];
+    char payload[200];
+    int tn = snprintf(topic, sizeof(topic), "rmms/%s/air", RMMS_DEVICE_UUID);
+    int pn = air_sample_encode(payload, sizeof(payload),
+                               time_us_64(), -1,
+                               ++s_air_seq, q,
+                               s.co2_ppm, s.tvoc_ppb, s.aqi);
+    if (tn <= 0 || pn < 0) {
+        printf("[bringup] air encode overflow\n");
+        return;
+    }
+
+    cyw43_arch_lwip_begin();
+    err_t pe = mqtt_publish(g_mqtt, topic, payload, (u16_t)pn,
+                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+    cyw43_arch_lwip_end();
+    if (pe != ERR_OK) {
+        printf("[bringup] air mqtt_publish immediate rc=%d\n", (int)pe);
+    } else {
+        printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u seq=%u\n",
+               s.aqi, s.co2_ppm, s.tvoc_ppb, q, (unsigned)s_air_seq);
+    }
+}
+#endif /* SENSOR_AIR_ON */
 
 /* ── Initialisation helpers ─────────────────────────────────────────────── */
 
@@ -244,6 +318,11 @@ static void sensors_task(void *arg)
     s_bme_ok = (e == ERR_OK);
     printf("[bringup] BME280 init %s (rc=%d)\n", s_bme_ok ? "OK" : "FAILED", (int)e);
 #endif
+#if SENSOR_AIR_ON
+    err_t ea = ens160_init(&s_ens, BOARD_I2C_INST, BOARD_ENS160_ADDR);
+    s_ens_ok = (ea == ERR_OK);
+    printf("[bringup] ENS160 init %s (rc=%d)\n", s_ens_ok ? "OK" : "FAILED", (int)ea);
+#endif
 
     /* ── Wi-Fi + mTLS + MQTT ─────────────────────────────────────────── */
     if (WIFI_SSID[0] == '\0') {
@@ -275,6 +354,12 @@ static void sensors_task(void *arg)
         } else {
 #if SENSOR_ENV_ON
             publish_env_sample();
+#endif
+#if SENSOR_AIR_ON
+            /* Publish /air every 5 s — ENS160 produces a fresh reading
+             * once a second, but the AQI / CO2 / TVOC change slowly and the
+             * mirror UI doesn't need 1 Hz updates. Reduces broker load. */
+            if ((tick % 5) == 0) publish_air_sample();
 #endif
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

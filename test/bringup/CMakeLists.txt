@@ -279,6 +279,7 @@ if(DEFINED CERTS_DIR)
     add_executable(bringup_sensors
         sensors_publish.c
         ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+        ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
         ${_baked_h}
     )
     target_include_directories(bringup_sensors BEFORE PRIVATE
@@ -287,6 +288,7 @@ if(DEFINED CERTS_DIR)
     )
     target_include_directories(bringup_sensors PRIVATE
         ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
+        ${CMAKE_SOURCE_DIR}/components/sensor_air   # ens160.h
     )
     target_link_libraries(bringup_sensors PRIVATE
         board
