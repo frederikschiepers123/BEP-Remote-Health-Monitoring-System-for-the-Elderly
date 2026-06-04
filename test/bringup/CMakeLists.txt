@@ -50,6 +50,105 @@ pico_enable_stdio_usb(bringup_storage 1)
 pico_enable_stdio_uart(bringup_storage 0)
 pico_add_extra_outputs(bringup_storage)
 
+# BME280 driver verification — no Wi-Fi, no MQTT. Inits I²C0, scans the bus,
+# initialises the BME280 and prints samples to PuTTY every second. Cleanest
+# way to confirm sensor wiring + driver before involving the network stack.
+add_executable(bringup_bme280
+    bme280_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+)
+target_include_directories(bringup_bme280 PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
+)
+target_link_libraries(bringup_bme280 PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none    # CYW43 must be initialised for any stdio_usb path
+    hardware_i2c
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_bme280 1)
+pico_enable_stdio_uart(bringup_bme280 0)
+pico_add_extra_outputs(bringup_bme280)
+
+# ENS160 driver verification — same shape as bringup_bme280.
+add_executable(bringup_ens160
+    ens160_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+)
+target_include_directories(bringup_ens160 PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_air
+)
+target_link_libraries(bringup_ens160 PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_ens160 1)
+pico_enable_stdio_uart(bringup_ens160 0)
+pico_add_extra_outputs(bringup_ens160)
+
+# MR60BHA2 radar driver verification — UART on GP4/GP5.
+# Links the existing components/sensor_radar/radar_bha2.c directly (avoids
+# the sensor_radar library's radar_task / radar_select dependencies which
+# pull in FreeRTOS queues and storage for /cfg lookup).
+add_executable(bringup_radar
+    radar_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
+)
+target_include_directories(bringup_radar PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar
+)
+target_link_libraries(bringup_radar PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_uart
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_radar 1)
+pico_enable_stdio_uart(bringup_radar 0)
+pico_add_extra_outputs(bringup_radar)
+
+# SH1106 OLED status pages with live BME280 + ENS160 readings.
+add_executable(bringup_oled
+    oled_only.c
+    ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+)
+target_include_directories(bringup_oled PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/ui_oled
+    ${CMAKE_SOURCE_DIR}/components/sensor_env
+    ${CMAKE_SOURCE_DIR}/components/sensor_air
+)
+target_link_libraries(bringup_oled PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_oled 1)
+pico_enable_stdio_uart(bringup_oled 0)
+pico_add_extra_outputs(bringup_oled)
+
 # Step 5 — Wi-Fi associate + DHCP, with /cfg provisioning. Mirrors the real
 # firmware's FreeRTOS + lwIP stack. Credentials come from env vars or -D cache
 # vars at configure time (NEVER committed); they are baked into this dev build
@@ -171,6 +270,52 @@ if(DEFINED CERTS_DIR)
     pico_enable_stdio_usb(bringup_mqtt 1)
     pico_enable_stdio_uart(bringup_mqtt 0)
     pico_add_extra_outputs(bringup_mqtt)
+
+    # ── Sensor publish bring-up — extends mqtt_connect with real sensor reads ──
+    # Same TLS+MQTT path as bringup_mqtt; adds I²C bus init + BME280 sampling
+    # + per-sensor topic publish (rmms/<uuid>/env now; /air and /radar coming).
+    # bme280.c is pulled in directly to avoid the sensor_env wrapper's FreeRTOS
+    # queue / app_config dependencies (those belong to firmware-proper, M8).
+    add_executable(bringup_sensors
+        sensors_publish.c
+        ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+        ${_baked_h}
+    )
+    target_include_directories(bringup_sensors BEFORE PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/lwip
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    target_include_directories(bringup_sensors PRIVATE
+        ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
+    )
+    target_link_libraries(bringup_sensors PRIVATE
+        board
+        log
+        pico_stdlib
+        pico_stdio_usb
+        hardware_i2c
+        pico_cyw43_arch_lwip_threadsafe_background
+        pico_lwip_mqtt
+        pico_lwip_mbedtls
+        pico_mbedtls
+        FreeRTOS-Kernel
+        FreeRTOS-Kernel-Heap4
+    )
+    if(DEFINED WIFI_SSID)
+        target_compile_definitions(bringup_sensors PRIVATE "WIFI_SSID=\"${WIFI_SSID}\"")
+    endif()
+    if(DEFINED WIFI_PSK)
+        target_compile_definitions(bringup_sensors PRIVATE "WIFI_PSK=\"${WIFI_PSK}\"")
+    endif()
+    if(DEFINED BROKER_IP)
+        target_compile_definitions(bringup_sensors PRIVATE "BROKER_IP=\"${BROKER_IP}\"")
+    endif()
+    if(DEFINED BROKER_PORT)
+        target_compile_definitions(bringup_sensors PRIVATE "BROKER_PORT=${BROKER_PORT}")
+    endif()
+    pico_enable_stdio_usb(bringup_sensors 1)
+    pico_enable_stdio_uart(bringup_sensors 0)
+    pico_add_extra_outputs(bringup_sensors)
 else()
-    message(STATUS "bringup_mqtt: skipped (set CERTS_DIR=out/device-<uuid> to build)")
+    message(STATUS "bringup_mqtt + bringup_sensors: skipped (set CERTS_DIR=out/device-<uuid> to build)")
 endif()

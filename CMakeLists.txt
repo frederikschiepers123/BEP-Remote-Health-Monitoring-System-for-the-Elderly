@@ -61,6 +61,7 @@ add_subdirectory(components/transport_selector)
 add_subdirectory(components/tls_context)
 add_subdirectory(components/mqtt_client)
 add_subdirectory(components/sensor_env)
+add_subdirectory(components/sensor_air)
 add_subdirectory(components/sensor_radar)
 add_subdirectory(components/sensor_light)
 add_subdirectory(components/ui_oled)
@@ -79,7 +80,7 @@ foreach(_tgt
     log storage json identity
     transport_usb transport_wifi transport_selector
     tls_context mqtt_client
-    sensor_env sensor_radar sensor_light
+    sensor_env sensor_air sensor_radar sensor_light
     ui_oled ui_input
     sensor_module)
     get_target_property(_srcs ${_tgt} SOURCES)
