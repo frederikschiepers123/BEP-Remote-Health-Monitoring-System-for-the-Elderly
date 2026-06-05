@@ -29,6 +29,8 @@
 #include "identity.h"
 #include "cfg.h"
 
+#include "lwip/dns.h"
+
 #include "mbedtls/platform_time.h"
 
 #include "board_pico2wh.h"
@@ -111,12 +113,75 @@ static Identity   g_id;
 static CfgWifi    g_wifi;
 static CfgBroker  g_broker;
 
-/* Resolves to broker.ip if present, else broker.host. The bring-up needs an
- * IP literal because mDNS isn't wired in here; the production stack adds
- * resolution per §8.2. */
+/* The bringup picks the broker address in this order:
+ *   1. broker.ip if it's a parseable IPv4 literal — fast path, no DNS.
+ *   2. broker.host via lwIP DNS — works for any hostname the network can
+ *      resolve (e.g. when the LAN has a real DNS server).
+ *
+ * Plain unicast DNS does NOT resolve `*.local` Multicast-DNS names —
+ * lwIP only ships the mDNS responder side (advertising); the query side
+ * needs a separate module that's intentionally not pulled in here.
+ * Workaround for hotspot/mDNS-only networks: set broker.ip to the
+ * tablet's IP (demo_start.sh does this automatically). */
 static const char *broker_addr_str(void)
 {
     return g_broker.ip[0] ? g_broker.ip : g_broker.host;
+}
+
+/* Synchronous wrapper around lwIP's async dns_gethostbyname.
+ *
+ * Polls a volatile flag instead of a semaphore — the dns_found callback under
+ * pico_cyw43_arch_lwip_threadsafe_background fires from an alarm-pool worker
+ * whose ISR/non-ISR status is awkward; xSemaphoreGive() needs the FromISR
+ * variant in IRQ context and the plain one otherwise. A polled flag avoids
+ * the question entirely and the cost is one vTaskDelay(10) per iteration. */
+typedef struct {
+    volatile bool done;
+    ip_addr_t     addr;
+    bool          found;
+} dns_wait_t;
+
+static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
+{
+    (void)name;
+    dns_wait_t *w = (dns_wait_t *)arg;
+    if (ipaddr) {
+        w->addr  = *ipaddr;
+        w->found = true;
+    }
+    w->done = true;
+}
+
+static bool resolve_broker_host(const char *host, ip_addr_t *out,
+                                uint32_t timeout_ms)
+{
+    dns_wait_t w = { .done = false, .found = false };
+
+    cyw43_arch_lwip_begin();
+    err_t e = dns_gethostbyname(host, &w.addr, dns_found_cb, &w);
+    cyw43_arch_lwip_end();
+
+    if (e == ERR_OK) {
+        /* Cached result; addr filled synchronously. */
+        *out = w.addr;
+        return true;
+    }
+    if (e != ERR_INPROGRESS) {
+        printf("[bringup] dns_gethostbyname('%s') immediate err=%d\n", host, (int)e);
+        return false;
+    }
+
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    while (!w.done && xTaskGetTickCount() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!w.done) {
+        printf("[bringup] dns_gethostbyname('%s') timeout after %lu ms\n",
+               host, (unsigned long)timeout_ms);
+        return false;
+    }
+    if (w.found) *out = w.addr;
+    return w.found;
 }
 
 #if OLED_ON
@@ -566,14 +631,28 @@ static void mqtt_setup_and_connect(void)
     s_ci.will_qos    = 1;
     s_ci.will_retain = 1;
 
-    if (!ipaddr_aton(broker_addr_str(), &s_broker_addr)) {
+    /* Address resolution: try IP literal first, fall back to DNS for host. */
+    bool got_addr = false;
+    if (g_broker.ip[0] && ipaddr_aton(g_broker.ip, &s_broker_addr)) {
+        printf("[bringup] broker IP literal: %s\n", g_broker.ip);
+        got_addr = true;
+    } else if (g_broker.host[0]) {
+        printf("[bringup] resolving broker host '%s' via DNS ...\n", g_broker.host);
+        got_addr = resolve_broker_host(g_broker.host, &s_broker_addr, 5000);
+        if (got_addr) {
+            printf("[bringup] DNS: %s → %s\n", g_broker.host,
+                   ipaddr_ntoa(&s_broker_addr));
+        }
+    }
+    if (!got_addr) {
         for (;;) {
-            printf("[bringup] broker addr '%s' not an IP literal\n", broker_addr_str());
+            printf("[bringup] broker addr resolve failed (ip='%s' host='%s')\n",
+                   g_broker.ip, g_broker.host);
             vTaskDelay(pdMS_TO_TICKS(3000));
         }
     }
     printf("[bringup] mqtt_client_connect → %s:%u\n",
-           broker_addr_str(), (unsigned)g_broker.port);
+           ipaddr_ntoa(&s_broker_addr), (unsigned)g_broker.port);
     cyw43_arch_lwip_begin();
     err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
                                   mqtt_connect_cb, NULL, &s_ci);

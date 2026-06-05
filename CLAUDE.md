@@ -430,9 +430,16 @@ reading" case the previous group documented.
 - `cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS)`.
 - Credentials in littlefs at `/cfg/wifi.json`. Provisioned at factory or over
   USB-CDC at first boot — no SoftAP, no captive portal.
-- Broker discovery: **mDNS resolution of `_mqtt._tcp.local`**, falls back to a
-  configured static IP in `/cfg/broker.json`. The previous group's UDP-broadcast
-  scheme is dead and **must not be reintroduced**.
+- Broker address resolution (production target):
+  1. `/cfg/broker.json` `ip` field, if present and parseable → use directly.
+  2. `/cfg/broker.json` `host` field → DNS lookup via lwIP `dns_gethostbyname`.
+  3. If the host is a `*.local` mDNS name → mDNS query (separate lwIP module,
+     **future work**). The current bring-up does steps 1 and 2 only.
+
+  The previous group's UDP-broadcast discovery scheme is dead and **must not
+  be reintroduced**. For hotspot/mDNS-only LANs where no DNS resolves
+  `tablet.local`, `demo_start.sh` writes the literal tablet IP into
+  `/cfg/broker.json` each session, so step 1 always succeeds.
 - TLS stack: **identical** to the USB-CDC path — same mbedTLS configuration,
   same cert chain, same cipher suites. The only difference is the underlying
   `stream_t` backend (lwIP TCP instead of TinyUSB CDC).
