@@ -1,11 +1,15 @@
 #define LOG_TAG "BH1750"
+#ifndef HOST_TEST
 #include "log.h"
+#endif
 
 #include "bh1750.h"
 #include "err.h"
 
+#ifndef HOST_TEST
 #include "FreeRTOS.h"
 #include "task.h"
+#endif
 
 #include <string.h>
 

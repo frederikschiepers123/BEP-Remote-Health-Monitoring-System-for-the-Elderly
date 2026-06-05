@@ -1,16 +1,22 @@
 #define LOG_TAG "BHA2"
+#ifndef HOST_TEST
 #include "log.h"
+#endif
 
 #include "radar_driver.h"
+#ifndef HOST_TEST
 #include "board_pico2wh.h"
+#endif
 #include "err.h"
 
+#ifndef HOST_TEST
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "pico/time.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
+#endif
 
 #include <stdint.h>
 #include <stdbool.h>

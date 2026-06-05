@@ -1,11 +1,15 @@
 #define LOG_TAG "AHT21"
+#ifndef HOST_TEST
 #include "log.h"
+#endif
 
 #include "aht21.h"
 #include "err.h"
 
+#ifndef HOST_TEST
 #include "FreeRTOS.h"
 #include "task.h"
+#endif
 
 #include <stdint.h>
 #include <string.h>

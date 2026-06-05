@@ -304,14 +304,20 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │
 ├── components/
 │   ├── board/                    # board_pico2wh.h, pin map, hardware init
-│   ├── sensor_env/               # BME280 driver + env_task
-│   ├── sensor_air/               # ENS160 driver + air_task
+│   ├── sensor_env/               # env_driver_t vtable + drivers + env_task
+│   │   ├── env_driver.h          # vtable: init/read_sample/name/ctx
+│   │   ├── env_select.c          # reads /cfg/sensors.json "env", returns driver
+│   │   ├── bme280.c              # BME280 (temp+hum+pres)
+│   │   └── aht21.c               # AHT21 (temp+hum, pres null)
+│   ├── sensor_air/               # ENS160 driver + air_task (consumes env's
+│   │   │                         #   temp/hum for TEMP_IN/RH_IN compensation)
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
-│   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver
-│   │   ├── radar_c1001.c         # DFRobot C1001 driver
+│   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (Seeed framing)
+│   │   ├── radar_c1001.c         # DFRobot C1001 driver (Andar framing)
 │   │   └── radar_select.c        # Reads /cfg/sensors.json, instantiates one
-│   ├── sensor_light/             # ADC sampling + light_task
-│   ├── ui_oled/                  # SH1106 driver + 4-page UI state machine
+│   ├── sensor_light/             # BH1750 (I²C lux) driver + light_task
+│   ├── cfg/                      # /cfg/{wifi,broker,sensors}.json loaders
+│   ├── ui_oled/                  # SH1122 driver + 4-page UI state machine
 │   ├── ui_input/                 # buttons + LEDs
 │   ├── transport_usb/            # TinyUSB CDC, stream wrapper
 │   ├── transport_wifi/           # CYW43 init, lwIP, DHCP, mDNS resolver
@@ -354,10 +360,10 @@ FreeRTOS SMP, both M33 cores enabled, tickless idle off (we are always mains-pow
 | Task              | Core affinity | Priority | Stack  | Notes                                |
 | ----------------- | ------------- | -------- | ------ | ------------------------------------ |
 | `app_main`        | Any           | 2        | 2 KB   | Watchdog kick, supervisor            |
-| `env_task`        | Any           | 3        | 2 KB   | Polls BME280 at 1 Hz                 |
+| `env_task`        | Any           | 3        | 2 KB   | Polls the env_driver_t (BME280 or AHT21 per `/cfg/sensors.json`) at 1 Hz; pushes its temp/hum into the ENS160 compensation regs each cycle |
 | `air_task`        | Any           | 3        | 2 KB   | Polls ENS160 at 1 Hz (warm-up gated) |
 | `radar_task`      | Core 1        | 4        | 4 KB   | UART RX, frame parsing               |
-| `light_task`      | Any           | 3        | 1 KB   | ADC at 1 Hz                          |
+| `light_task`      | Any           | 3        | 1 KB   | BH1750 I²C read at 0.2 Hz (continuous H-res; lux barely moves at 1 Hz) |
 | `ui_task`         | Core 0        | 2        | 4 KB   | OLED redraw on button or 1 Hz        |
 | `transport_task`  | Core 0        | 5        | 6 KB   | Owns the active stream + MQTT client |
 | `selector_task`   | Core 0        | 6        | 2 KB   | Transport FSM, highest priority      |
@@ -547,6 +553,10 @@ firmware never silently drops samples.
 ```json
 {"temp_c":21.500,"hum_pct":55.000,"pres_hpa":1013.250}
 ```
+- `pres_hpa` is `null` when the AHT21 env driver is active (it has no
+  pressure sensor); the BME280 driver always emits a numeric value. This
+  is consistent with §9.2.3's "encode `null` for unavailable values" rule
+  — receivers should not assume `pres_hpa` is always numeric.
 
 **air** (`rmms/<uuid>/air`):
 ```json
@@ -1134,12 +1144,20 @@ Do not skip ahead. Each step assumes the previous works.
 2. **FreeRTOS hello** — one task, blinks at 1 Hz. Verify SMP boot.
 3. **CDC1 logs** — `LOG_I` over CDC1, viewable in minicom.
 4. **littlefs mount** — read-modify-write a counter at `/state/boot_count.json`.
-5. **BME280** — env_task publishing JSON samples to a local debug sink (no
-   MQTT yet). Validates the snprintf encoder pattern from §9.2.
-5b. **ENS160** — air_task publishing JSON samples. Writes BME280's last
-   temp/hum to ENS160 compensation registers each cycle. Confirm the
-   ~5–10 min warm-up: during it the driver reports `q=2` (degraded) and
-   the AQI sits at 0/1 until the gas heaters stabilise.
+5. **Env (AHT21 or BME280)** — env_task driving the env_driver_t v-table,
+   selected via `/cfg/sensors.json` `"env"` field (default AHT21 on the
+   current PCB; BME280 if that footprint is populated). Publishes JSON
+   samples to a local debug sink (no MQTT yet). Validates the snprintf
+   encoder pattern from §9.2 — including the `"pres_hpa": null` path when
+   the AHT21 is selected.
+5b. **ENS160** — air_task publishing JSON samples. Writes the env driver's
+   last temp/hum to ENS160 compensation registers each cycle (works
+   identically for AHT21 and BME280). Confirm the ~5–10 min warm-up:
+   during it the driver reports `q=2` (degraded) and the AQI sits at 0/1
+   until the gas heaters stabilise.
+5c. **BH1750** — light_task publishing JSON samples (`{"lux": ...}`) at
+   ~0.2 Hz. Continuous H-resolution mode (~120 ms per measurement);
+   driver-side init does power-on + mode + initial 180 ms wait.
 6. **mbedTLS + stream_cdc** — TLS handshake over CDC0 against a host-side
    `openssl s_server` configured with the project CA. This validates the cert
    chain and the BIO callbacks before any MQTT code.

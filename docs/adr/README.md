@@ -24,7 +24,7 @@ What becomes easier or harder?
 
 | # | Title | Status |
 |---|-------|--------|
-| (none yet — first decision record goes here) | | |
+| [0001](0001-light-sensor-bh1750.md) | Replace GL5516 LDR with Rohm BH1750FVI for ambient light | Accepted |
 
 ## When to write an ADR
 
