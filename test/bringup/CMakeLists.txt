@@ -50,6 +50,23 @@ pico_enable_stdio_usb(bringup_storage 1)
 pico_enable_stdio_uart(bringup_storage 0)
 pico_add_extra_outputs(bringup_storage)
 
+# Factory provisioning — writes UUID + ECDSA cert chain + per-device config
+# into the §11 canonical paths over USB-serial. Replaces compile-time-baked
+# certs. Driven by scripts/provision_device.py. Watchdog-reboots on REBOOT.
+add_executable(bringup_provision provision.c)
+target_link_libraries(bringup_provision PRIVATE
+    storage
+    board
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    pico_mbedtls          # SHA-256 over each artefact
+    hardware_watchdog
+)
+pico_enable_stdio_usb(bringup_provision 1)
+pico_enable_stdio_uart(bringup_provision 0)
+pico_add_extra_outputs(bringup_provision)
+
 # BME280 driver verification — no Wi-Fi, no MQTT. Inits I²C0, scans the bus,
 # initialises the BME280 and prints samples to PuTTY every second. Cleanest
 # way to confirm sensor wiring + driver before involving the network stack.
