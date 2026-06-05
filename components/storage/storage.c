@@ -6,6 +6,7 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
+#include "pico/flash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -27,22 +28,54 @@ static int lfs_flash_read(const struct lfs_config *cfg, lfs_block_t block,
     return LFS_ERR_OK;
 }
 
+/* flash_safe_execute parks the other core (via the multicore lockout under
+ * SMP, or trivially under single-core) and disables interrupts before running
+ * the callback. This is the only correct way to touch flash while XIP is
+ * serving instructions to either core. The previous save_and_disable_interrupts()
+ * pattern was a single-core artefact and would crash core 1 the instant we
+ * moved to pico_cyw43_arch_lwip_sys_freertos. See CLAUDE.md §7. */
+#define STORAGE_FLASH_OP_TIMEOUT_MS 5000
+
+typedef struct {
+    uint32_t       addr;
+    const uint8_t *buf;
+    size_t         size;
+} flash_prog_args_t;
+
+static void do_flash_program(void *param) {
+    const flash_prog_args_t *a = (const flash_prog_args_t *)param;
+    flash_range_program(a->addr, a->buf, a->size);
+}
+
+static void do_flash_erase(void *param) {
+    uint32_t addr = *(const uint32_t *)param;
+    flash_range_erase(addr, FLASH_SECTOR_SIZE);
+}
+
 static int lfs_flash_prog(const struct lfs_config *cfg, lfs_block_t block,
                            lfs_off_t off, const void *buf, lfs_size_t size) {
     (void)cfg;
-    uint32_t addr = (uint32_t)(STORAGE_FLASH_OFFSET + block * FLASH_SECTOR_SIZE + off);
-    uint32_t irq = save_and_disable_interrupts();
-    flash_range_program(addr, (const uint8_t *)buf, size);
-    restore_interrupts(irq);
+    flash_prog_args_t args = {
+        .addr = (uint32_t)(STORAGE_FLASH_OFFSET + block * FLASH_SECTOR_SIZE + off),
+        .buf  = (const uint8_t *)buf,
+        .size = size,
+    };
+    int rc = flash_safe_execute(do_flash_program, &args, STORAGE_FLASH_OP_TIMEOUT_MS);
+    if (rc != PICO_OK) {
+        LOG_E("flash_safe_execute(prog) failed: %d", rc);
+        return LFS_ERR_IO;
+    }
     return LFS_ERR_OK;
 }
 
 static int lfs_flash_erase(const struct lfs_config *cfg, lfs_block_t block) {
     (void)cfg;
     uint32_t addr = (uint32_t)(STORAGE_FLASH_OFFSET + block * FLASH_SECTOR_SIZE);
-    uint32_t irq = save_and_disable_interrupts();
-    flash_range_erase(addr, FLASH_SECTOR_SIZE);
-    restore_interrupts(irq);
+    int rc = flash_safe_execute(do_flash_erase, &addr, STORAGE_FLASH_OP_TIMEOUT_MS);
+    if (rc != PICO_OK) {
+        LOG_E("flash_safe_execute(erase) failed: %d", rc);
+        return LFS_ERR_IO;
+    }
     return LFS_ERR_OK;
 }
 

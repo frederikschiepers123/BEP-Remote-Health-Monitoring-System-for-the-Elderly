@@ -4,7 +4,15 @@
 /* Thin KV store over littlefs.
  * Mount point: top 256 KB of QSPI flash.
  * All file I/O in the firmware must go through this component.
- * No direct littlefs calls outside components/storage/. */
+ * No direct littlefs calls outside components/storage/.
+ *
+ * SMP note: storage_write triggers flash erase/program through
+ * pico_flash's flash_safe_execute, which parks the "other" core for the
+ * duration of the XIP-offline window. Under FreeRTOS-SMP (the
+ * pico_cyw43_arch_lwip_sys_freertos arch), one task on each non-writing
+ * core must have called multicore_lockout_victim_init() / its FreeRTOS
+ * wrapper before the first storage_write. The single-core
+ * threadsafe_background arch needs no extra setup. */
 
 #include "err.h"
 #include <stdbool.h>

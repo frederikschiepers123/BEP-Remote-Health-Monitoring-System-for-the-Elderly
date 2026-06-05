@@ -7,6 +7,7 @@ target_link_libraries(storage PRIVATE
     log
     littlefs
     pico_stdlib
+    pico_flash
     hardware_flash
     hardware_sync
 )
