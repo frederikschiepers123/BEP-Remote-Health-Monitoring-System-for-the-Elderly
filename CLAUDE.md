@@ -741,6 +741,54 @@ else.
   mirror); it does **not** go in the firmware. New raw topics require
   a sensor on the board.
 
+#### 9.5.1 Mirror-internal `sensors/*` notification namespace
+
+The mirror uses **two distinct namespaces** by design:
+
+| Namespace | Layer | Where it lives |
+|---|---|---|
+| `rmms/<uuid>/...` | MQTT wire contract | Firmware ↔ broker ↔ subscribers (Radxa, mirror) |
+| `sensors/<field>` | MM² in-process notification bus | `MMM-CustomMQTTBridge` ↔ `MMM-SensorUI` |
+
+`MMM-CustomMQTTBridge` is the adapter between the two: it does mTLS to the
+broker, parses the §9.2 JSON envelope, and re-broadcasts each logical
+field as a `MQTT_SENSOR_UPDATE` notification with payload
+`{topic: "sensors/<field>", message: "<string>"}` so MMM-SensorUI's
+existing per-field handlers don't need to know about wire-level details
+(JSON shape, envelope, quality flag, multi-field topics like `radar`).
+
+The bridge is the **single source of truth** for this translation. The
+canonical mapping table lives at the top of
+`MagicMirror/modules/MMM-CustomMQTTBridge/node_helper.js`.
+
+| Broker topic + field | Mirror notification | Value (string) |
+|---|---|---|
+| `rmms/<uuid>/env.v.temp_c` | `sensors/temperature` | float, 1 decimal |
+| `rmms/<uuid>/env.v.hum_pct` | `sensors/humidity` | int, rounded |
+| `rmms/<uuid>/air.v.aqi` | `sensors/airquality` | UBA label ("GOOD" …) |
+| `rmms/<uuid>/air.v.co2_ppm` | `sensors/co2` | int |
+| `rmms/<uuid>/air.v.tvoc_ppb` | `sensors/tvoc` | int |
+| `rmms/<uuid>/radar.v.heart_bpm` | `sensors/heartrate` | int, rounded |
+| `rmms/<uuid>/radar.v.breath_bpm` | `sensors/respiratoryrate` | int, rounded |
+| `rmms/<uuid>/info.v.text` | `sensors/infomessage` | text |
+| `rmms/<uuid>/status` (retained) | `sensors/status` | `"online"`/`"offline"` |
+
+**Rules:**
+
+- The firmware **only** knows the `rmms/...` namespace. It does not emit
+  `sensors/...` anything.
+- The MMM-SensorUI tile code **only** consumes `sensors/...`
+  notifications. It does not parse JSON, does not know the wire
+  envelope, does not know about `q` / `wall_ms` / `seq`.
+- Translation, quality-flag handling, and stringification all live in
+  the bridge's node_helper. Adding a new sensor field is a 3-line
+  change in one place (one `send("name", val)` call in the right `if`
+  branch) — nowhere else.
+- Both namespaces appear in this file deliberately: §9.1 / §9.2 / §9.5
+  describe the **broker contract** the firmware and other subscribers
+  see; this §9.5.1 describes the **mirror-internal contract** the
+  bridge and `MMM-SensorUI` agree on. They are not synonyms.
+
 ### 9.6 FHIR contract (firmware ↔ Radxa data format)
 
 **The firmware emits sensor JSON (per §9.2). The Radxa emits FHIR JSON.

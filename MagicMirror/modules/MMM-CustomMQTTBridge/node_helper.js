@@ -1,19 +1,33 @@
 /*
  * MMM-CustomMQTTBridge / node_helper
  *
- * Opens an mTLS connection to the RMMS broker, subscribes to the requested
- * topics, then parses each rmms/<uuid>/<kind> message into per-field
- * MQTT_SENSOR_UPDATE notifications that MMM-SensorUI consumes:
+ * Adapter between two namespaces the mirror uses (CLAUDE.md §9.5.1):
+ *   • broker MQTT contract  — rmms/<uuid>/<kind> with the §9.2 JSON envelope
+ *   • mirror notification bus — sensors/<field> strings via MQTT_SENSOR_UPDATE
  *
- *   rmms/<uuid>/env    → sensors/temperature, sensors/humidity
- *   rmms/<uuid>/air    → sensors/airquality (UBA label), sensors/co2, sensors/tvoc
- *   rmms/<uuid>/radar  → sensors/heartrate, sensors/respiratoryrate
- *   rmms/<uuid>/info   → sensors/infomessage
- *   rmms/<uuid>/status → sensors/status (online/offline, bridge-internal)
- *   rmms/<uuid>/light  → ignored in v1
+ * THIS FILE IS THE CANONICAL MAPPING TABLE referenced by CLAUDE.md §9.5.1.
+ * If a new sensor field is added, edit it here in exactly one place:
+ *
+ *   Broker topic + field                  Mirror notification     Value (string)
+ *   ───────────────────────────────────── ─────────────────────── ──────────────
+ *   rmms/<uuid>/env    v.temp_c           sensors/temperature     float, .toFixed(1)
+ *                      v.hum_pct          sensors/humidity        int, rounded
+ *   rmms/<uuid>/air    v.aqi (1..5)       sensors/airquality      UBA label
+ *                      v.co2_ppm          sensors/co2             int
+ *                      v.tvoc_ppb         sensors/tvoc            int
+ *   rmms/<uuid>/radar  v.heart_bpm        sensors/heartrate       int, rounded
+ *                      v.breath_bpm       sensors/respiratoryrate int, rounded
+ *   rmms/<uuid>/info   v.text             sensors/infomessage     text
+ *   rmms/<uuid>/status (raw string)       sensors/status          "online"/"offline"
+ *   rmms/<uuid>/light  ignored in v1
+ *   rmms/<uuid>/log    ignored (not sensor data)
+ *
+ * Quality-flag handling and JSON envelope parsing live here too — they do
+ * NOT belong in MMM-SensorUI, which only consumes the sensors/* events.
  *
  * Yasmina's original plaintext mqtt://localhost:1883 flow stays usable by
- * leaving the caFile/certFile/keyFile config blank.
+ * leaving caFile/certFile/keyFile empty in the module config — the bridge
+ * falls back to plain MQTT and forwards unknown topics verbatim.
  */
 const NodeHelper = require("node_helper");
 const mqtt       = require("mqtt");
