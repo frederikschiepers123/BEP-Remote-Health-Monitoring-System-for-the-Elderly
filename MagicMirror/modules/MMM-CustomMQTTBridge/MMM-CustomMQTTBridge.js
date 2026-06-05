@@ -2,7 +2,10 @@ Module.register("MMM-CustomMQTTBridge", {
 
     defaults: {
         broker: "mqtt://localhost:1883",
+        // broker: "mqtt://127.0.0.1:1883",
+        // broker: "mqtts://localhost:8883",  // or mqtts://172.20.10.10:8883
         topics: ["magicmirror/test", "sensors/#"]
+        // topics: ["env", "air"]
     },
 
     // Alleen getal (geen unit)
