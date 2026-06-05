@@ -115,13 +115,20 @@ static float le_float(const uint8_t *p) {
     return f;
 }
 
-/* Wait for one byte from the UART with timeout. Yields the task while waiting
- * so we don't starve the rest of the system. */
+/* Wait for one byte with timeout. Uses vTaskDelay(1) when the FIFO is empty
+ * so lower-priority tasks (and the cyw43_arch_lwip_threadsafe_background
+ * alarm path) actually get CPU. taskYIELD() is a no-op here because the
+ * reader task is the highest-priority task on its core; that would let it
+ * spin-saturate the core and starve everything else (observed: MQTT publishes
+ * hang within seconds once the reader task is the priority-3 holder).
+ *
+ * 1 tick = 1 ms with the default configTICK_RATE_HZ. At 115200 baud that's
+ * up to 11 bytes per delay, well within the Pico's 32-entry UART RX FIFO. */
 static bool read_byte(uart_inst_t *uart, uint8_t *out, uint32_t timeout_ms) {
     uint32_t deadline = now_ms() + timeout_ms;
     while (!uart_is_readable(uart)) {
         if (now_ms() >= deadline) return false;
-        taskYIELD();
+        vTaskDelay(1);
     }
     *out = (uint8_t)uart_getc(uart);
     return true;

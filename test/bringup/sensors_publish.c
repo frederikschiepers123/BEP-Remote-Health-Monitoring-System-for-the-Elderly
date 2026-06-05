@@ -186,6 +186,12 @@ static uint32_t s_air_seq = 0;
 static radar_driver_t *s_radar = NULL;
 static bool            s_radar_ok = false;
 static uint32_t        s_radar_seq = 0;
+/* Shared latched sample. The reader task pumps the UART in a tight loop and
+ * overwrites this; the 1 Hz publish + OLED snapshot it. Volatile-only
+ * synchronisation is fine because RadarSample fits in a few words and a
+ * torn read at worst shows last-tick's data, which the q field guards. */
+static volatile RadarSample s_radar_latched;
+static volatile bool        s_radar_latched_valid = false;
 #if OLED_ON
 static volatile float    s_disp_heart = 0.0f, s_disp_breath = 0.0f;
 static volatile uint32_t s_disp_dist_mm = 0;
@@ -364,19 +370,16 @@ static int radar_sample_encode(char *buf, size_t cap,
 static void publish_radar_sample(void)
 {
     if (!s_radar_ok) return;
-
-    RadarSample s;
-    /* 800 ms budget — short enough to leave headroom in the 1 Hz tick,
-     * long enough to almost always catch a fresh breath/heart frame. */
-    err_t e = s_radar->read_sample(s_radar->ctx, &s, 800);
-    uint8_t q = s.q;
-    if (e == ERR_TIMEOUT) {
-        /* No frames in this window: keep going but mark invalid. The driver
-         * sets q=3 in this case already. */
-    } else if (e != ERR_OK) {
-        printf("[bringup] radar read failed rc=%d\n", (int)e);
-        q = 3;
+    if (!s_radar_latched_valid) {
+        /* Reader task hasn't latched anything yet (first second after boot). */
+        return;
     }
+
+    /* Snapshot the latched sample. memcpy through volatile copies is fine
+     * here — RadarSample is plain old data. */
+    RadarSample s;
+    memcpy(&s, (const void *)&s_radar_latched, sizeof(s));
+    uint8_t q = s.q;
 
     char payload[256];
     int pn = radar_sample_encode(payload, sizeof(payload),
@@ -640,6 +643,34 @@ static void render_task(void *arg)
 }
 #endif /* OLED_ON */
 
+#if SENSOR_RADAR_ON
+/* Dedicated reader: keeps the UART RX FIFO drained so the BHA2 parser
+ * stays in sync. The Pico UART FIFO is only ~32 B (~2.8 ms at 115200);
+ * any longer sleep loses bytes and slips framing. read_sample() yields
+ * inside its byte-wait loop, so this task plays nice with the rest of
+ * the system. */
+static void radar_reader_task(void *arg)
+{
+    (void)arg;
+    while (!s_radar_ok) vTaskDelay(pdMS_TO_TICKS(50));
+    printf("[bringup] radar reader task running\n");
+
+    for (;;) {
+        RadarSample s;
+        err_t e = s_radar->read_sample(s_radar->ctx, &s, /*timeout_ms=*/500);
+        if (e == ERR_OK || e == ERR_TIMEOUT) {
+            /* Even on timeout, the driver still fills `s` with q=3 — we
+             * latch it so publish_radar_sample reports invalid rather than
+             * dragging a stale "good" sample forward. */
+            memcpy((void *)&s_radar_latched, &s, sizeof(s));
+            s_radar_latched_valid = true;
+        }
+        /* No sleep between iterations: read_sample's deadline + internal
+         * taskYIELD give other tasks plenty of CPU. */
+    }
+}
+#endif /* SENSOR_RADAR_ON */
+
 static void sensors_task(void *arg)
 {
     (void)arg;
@@ -760,6 +791,16 @@ int main(void)
     /* Same core-0 affinity as bringup_mqtt (sys_freertos cyw43 is not SMP-clean
      * with this pico-sdk rev; see memory project-cyw43-sys-freertos-hang). */
     xTaskCreateAffinitySet(sensors_task, "sensors", 8192, NULL, 2, 0x01, NULL);
+#if SENSOR_RADAR_ON
+    /* Radar reader at priority 3 (above sensors+MQTT) so UART RX FIFO doesn't
+     * overrun during long mqtt_publish / I²C bursts. Pinned to core 0 — same
+     * core as sensors_task — because pico_cyw43_arch_lwip_threadsafe_background
+     * isn't FreeRTOS-SMP aware and a continuously-running core-1 task starves
+     * its alarm-pool path (observed: MQTT freezes after the first tick).
+     * read_byte() in the BHA2 driver uses vTaskDelay(1) so sensors_task gets
+     * CPU whenever the UART FIFO is briefly empty. */
+    xTaskCreateAffinitySet(radar_reader_task, "radar", 4096, NULL, 3, 0x01, NULL);
+#endif
 #if OLED_ON
     /* OLED render runs at lower priority + core 0 so the sensor+MQTT task
      * always pre-empts it. ~3 KB stack is enough for snprintf + sh1122. */
