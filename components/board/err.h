@@ -20,6 +20,7 @@ typedef int32_t err_t;
 #define ERR_TLS             ((err_t) -10)
 #define ERR_MQTT            ((err_t) -11)
 #define ERR_FS              ((err_t) -12)
+#define ERR_PARSE           ((err_t) -13)   /* malformed input (JSON, frame, etc.) */
 
 /* Convenience: propagate an error up the call stack. */
 #define TRY(expr)                   \

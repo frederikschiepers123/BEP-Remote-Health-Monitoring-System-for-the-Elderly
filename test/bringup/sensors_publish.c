@@ -3,12 +3,17 @@
  *
  * This is the supervisor-demo target: extends bringup_mqtt with real sensor
  * data. Each sensor lives behind a simple #ifdef so we can flip them on/off
- * as drivers come online. Initial commit: BME280 on I²C0 → rmms/<uuid>/env.
- * Next iterations add ENS160 → /air and MR60BHA2 → /radar.
+ * as drivers come online: BME280 → rmms/<uuid>/env, ENS160 → /air,
+ * MR60BHA2 → /radar (NYI).
  *
- *   bake_certs.py @ CMake-time → baked_certs.h (CA, cert, key, UUID)
- *   one task: wait stdio → cyw43 init → wifi → mTLS → MQTT CONNECT
- *           → 1 Hz loop: read each enabled sensor, publish its topic
+ *   storage_mount() → identity_load() + cfg_load_wifi/broker() from littlefs
+ *   one task: wait stdio → load identity/cfg → cyw43 init → wifi → mTLS
+ *           → MQTT CONNECT → 1 Hz loop: read each enabled sensor, publish.
+ *
+ * Identity (UUID + cert chain) and per-deployment config (Wi-Fi creds,
+ * broker address, radar choice) live in littlefs — provisioned once with
+ * bringup_provision + scripts/provision_device.py. Reflashing firmware
+ * never touches them.
  */
 #include "FreeRTOS.h"
 #include "task.h"
@@ -20,7 +25,9 @@
 #include "lwip/altcp_tls.h"
 #include "lwip/apps/mqtt.h"
 
-#include "baked_certs.h"
+#include "storage.h"
+#include "identity.h"
+#include "cfg.h"
 
 #include "mbedtls/platform_time.h"
 
@@ -35,19 +42,6 @@
 
 #include <stdio.h>
 #include <string.h>
-
-#ifndef WIFI_SSID
-#define WIFI_SSID ""
-#endif
-#ifndef WIFI_PSK
-#define WIFI_PSK ""
-#endif
-#ifndef BROKER_IP
-#define BROKER_IP "192.168.2.24"
-#endif
-#ifndef BROKER_PORT
-#define BROKER_PORT 8883
-#endif
 
 /* Sensor-enable switches — flip to 0 to disable a sensor at compile time
  * (e.g. while bringing up another one). Default: all on. */
@@ -85,6 +79,34 @@ mbedtls_ms_time_t mbedtls_ms_time(void)
 /* ── MQTT state ─────────────────────────────────────────────────────────── */
 static mqtt_client_t *g_mqtt;
 static volatile bool g_mqtt_connected = false;
+/* Reconnect / LWT plumbing — the mqtt_connect_client_info_t and altcp_tls
+ * config must outlive the publish loop because mqtt_client_connect doesn't
+ * copy the struct, and we want to reconnect on broker drop without re-doing
+ * cert parsing. All four are touched only from the sensors task or from
+ * lwIP callbacks; lwIP callbacks fire under the cyw43 background context
+ * which is single-threaded against the sensors task's cyw43_arch_lwip_begin
+ * critical sections. */
+static struct altcp_tls_config       *s_tls_cfg = NULL;
+static struct mqtt_connect_client_info_t s_ci;
+static ip_addr_t                      s_broker_addr;
+static char                           s_status_topic[80] = "";
+static char                           s_topic_env[80] = "";
+static char                           s_topic_air[80] = "";
+static volatile bool                  s_reconnect_pending = false;
+static uint32_t                       s_reconnect_backoff_ms = 1000;
+
+/* Boot-time identity + per-deployment config loaded from littlefs. */
+static Identity   g_id;
+static CfgWifi    g_wifi;
+static CfgBroker  g_broker;
+
+/* Resolves to broker.ip if present, else broker.host. The bring-up needs an
+ * IP literal because mDNS isn't wired in here; the production stack adds
+ * resolution per §8.2. */
+static const char *broker_addr_str(void)
+{
+    return g_broker.ip[0] ? g_broker.ip : g_broker.host;
+}
 
 #if OLED_ON
 /* ── OLED state ─────────────────────────────────────────────────────────── */
@@ -100,12 +122,39 @@ static volatile uint8_t  s_disp_aqi = 0, s_disp_air_q = 3;
 static volatile bool     s_disp_air_have = false;
 #endif
 
+static void mqtt_pub_status_cb(void *arg, err_t result)
+{
+    (void)arg;
+    if (result != ERR_OK) {
+        printf("[bringup] status publish rc=%d\n", (int)result);
+    }
+}
+
 static void mqtt_connect_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t status)
 {
-    (void)c; (void)arg;
+    (void)arg;
     printf("[bringup] MQTT CONNACK status=%d %s\n", status,
            status == MQTT_CONNECT_ACCEPTED ? "ACCEPTED" : "(not accepted)");
+    bool was_connected = g_mqtt_connected;
     g_mqtt_connected = (status == MQTT_CONNECT_ACCEPTED);
+
+    if (g_mqtt_connected) {
+        /* Reset backoff; reconnects after a long outage stabilise fast. */
+        s_reconnect_backoff_ms = 1000;
+        /* Publish status=online retained (matches the LWT shape so the mirror
+         * sees a clean transition). We're already in the lwIP background
+         * context here, so no cyw43_arch_lwip_begin() needed. */
+        if (s_status_topic[0] != '\0') {
+            (void)mqtt_publish(c, s_status_topic, "online", 6,
+                               /*qos=*/1, /*retain=*/1,
+                               mqtt_pub_status_cb, NULL);
+        }
+    } else if (was_connected) {
+        /* Disconnected after being up — kick off reconnect from the main
+         * loop (we can't call mqtt_client_connect from inside this callback;
+         * it would re-enter the client state machine). */
+        s_reconnect_pending = true;
+    }
 }
 
 static void mqtt_pub_cb(void *arg, err_t result)
@@ -158,20 +207,18 @@ static void publish_env_sample(void)
         s.temp_c = s.humidity_pct = s.pressure_hpa = 0.0f;
     }
 
-    char topic[80];
     char payload[256];
-    int tn = snprintf(topic, sizeof(topic), "rmms/%s/env", RMMS_DEVICE_UUID);
     int pn = env_sample_encode(payload, sizeof(payload),
                                time_us_64(), -1,    /* wall_ms unknown */
                                ++s_env_seq, q,
                                s.temp_c, s.humidity_pct, s.pressure_hpa);
-    if (tn <= 0 || pn < 0) {
+    if (pn < 0) {
         printf("[bringup] env encode overflow\n");
         return;
     }
 
     cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, topic, payload, (u16_t)pn,
+    err_t pe = mqtt_publish(g_mqtt, s_topic_env, payload, (u16_t)pn,
                             /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
     cyw43_arch_lwip_end();
     if (pe != ERR_OK) {
@@ -232,20 +279,18 @@ static void publish_air_sample(void)
         else                                   q = 2;
     }
 
-    char topic[80];
     char payload[200];
-    int tn = snprintf(topic, sizeof(topic), "rmms/%s/air", RMMS_DEVICE_UUID);
     int pn = air_sample_encode(payload, sizeof(payload),
                                time_us_64(), -1,
                                ++s_air_seq, q,
                                s.co2_ppm, s.tvoc_ppb, s.aqi);
-    if (tn <= 0 || pn < 0) {
+    if (pn < 0) {
         printf("[bringup] air encode overflow\n");
         return;
     }
 
     cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, topic, payload, (u16_t)pn,
+    err_t pe = mqtt_publish(g_mqtt, s_topic_air, payload, (u16_t)pn,
                             /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
     cyw43_arch_lwip_end();
     if (pe != ERR_OK) {
@@ -294,12 +339,12 @@ static void i2c_scan(void)
 static void mqtt_setup_and_connect(void)
 {
     printf("[bringup] building altcp_tls config (mTLS, ECDSA P-256)\n");
-    struct altcp_tls_config *tls_cfg = altcp_tls_create_config_client_2wayauth(
-        rmms_ca_der,  rmms_ca_der_len,
-        rmms_dev_key, rmms_dev_key_len,
+    s_tls_cfg = altcp_tls_create_config_client_2wayauth(
+        g_id.ca_der,      g_id.ca_len,
+        g_id.dev_key_der, g_id.dev_key_len,
         NULL, 0,
-        rmms_dev_crt, rmms_dev_crt_len);
-    if (!tls_cfg) {
+        g_id.dev_crt_der, g_id.dev_crt_len);
+    if (!s_tls_cfg) {
         for (;;) { printf("[bringup] altcp_tls FAILED\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
     }
 
@@ -308,24 +353,60 @@ static void mqtt_setup_and_connect(void)
         for (;;) { printf("[bringup] mqtt_client_new FAILED\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
     }
 
-    struct mqtt_connect_client_info_t ci;
-    memset(&ci, 0, sizeof(ci));
-    ci.client_id  = RMMS_DEVICE_UUID;
-    ci.keep_alive = 60;
-    ci.tls_config = tls_cfg;
+    /* Build per-UUID topics once — used for status (LWT + online), env, air. */
+    snprintf(s_status_topic, sizeof(s_status_topic), "rmms/%s/status", g_id.uuid);
+    snprintf(s_topic_env,    sizeof(s_topic_env),    "rmms/%s/env",    g_id.uuid);
+    snprintf(s_topic_air,    sizeof(s_topic_air),    "rmms/%s/air",    g_id.uuid);
 
-    ip_addr_t broker_addr;
-    if (!ipaddr_aton(BROKER_IP, &broker_addr)) {
-        for (;;) { printf("[bringup] bad BROKER_IP\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+    memset(&s_ci, 0, sizeof(s_ci));
+    s_ci.client_id  = g_id.uuid;
+    s_ci.keep_alive = 60;
+    s_ci.tls_config = s_tls_cfg;
+    /* LWT: broker publishes status=offline (retained QoS 1) on our behalf
+     * whenever it stops seeing keepalives. The mirror sees device-offline
+     * within keepalive*1.5 = 90 s after a hard Pico drop. */
+    s_ci.will_topic  = s_status_topic;
+    s_ci.will_msg    = (const u8_t *)"offline";
+    s_ci.will_qos    = 1;
+    s_ci.will_retain = 1;
+
+    if (!ipaddr_aton(broker_addr_str(), &s_broker_addr)) {
+        for (;;) {
+            printf("[bringup] broker addr '%s' not an IP literal\n", broker_addr_str());
+            vTaskDelay(pdMS_TO_TICKS(3000));
+        }
     }
-    printf("[bringup] mqtt_client_connect → %s:%d\n", BROKER_IP, (int)BROKER_PORT);
+    printf("[bringup] mqtt_client_connect → %s:%u\n",
+           broker_addr_str(), (unsigned)g_broker.port);
     cyw43_arch_lwip_begin();
-    err_t e = mqtt_client_connect(g_mqtt, &broker_addr, BROKER_PORT,
-                                  mqtt_connect_cb, NULL, &ci);
+    err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
+                                  mqtt_connect_cb, NULL, &s_ci);
     cyw43_arch_lwip_end();
     if (e != ERR_OK) {
         printf("[bringup] mqtt_client_connect immediate rc=%d\n", (int)e);
     }
+}
+
+/* Reconnect helper — called from the main loop when s_reconnect_pending is
+ * set OR when we notice mqtt_client_is_connected() returned false. Uses
+ * exponential backoff capped at 30 s. */
+static void mqtt_try_reconnect(void)
+{
+    if (g_mqtt_connected) return;   /* nothing to do */
+    printf("[bringup] mqtt reconnect → %s:%u (backoff %lu ms)\n",
+           broker_addr_str(), (unsigned)g_broker.port,
+           (unsigned long)s_reconnect_backoff_ms);
+    cyw43_arch_lwip_begin();
+    err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
+                                  mqtt_connect_cb, NULL, &s_ci);
+    cyw43_arch_lwip_end();
+    if (e != ERR_OK) {
+        printf("[bringup] mqtt reconnect immediate rc=%d\n", (int)e);
+    }
+    s_reconnect_pending = false;
+    /* Double next backoff (cap 30 s). Reset on CONNACK ACCEPTED. */
+    s_reconnect_backoff_ms = (s_reconnect_backoff_ms * 2u);
+    if (s_reconnect_backoff_ms > 30000u) s_reconnect_backoff_ms = 30000u;
 }
 
 /* ── Main task ──────────────────────────────────────────────────────────── */
@@ -360,7 +441,7 @@ static void render_page_net(uint32_t uptime_s)
     char line[40];
     snprintf(line, sizeof(line), "WIFI %s", s_wifi_ip);
     sh1122_draw_text(&s_oled, 0, 18, 2, line);
-    snprintf(line, sizeof(line), "BROKER %s", BROKER_IP);
+    snprintf(line, sizeof(line), "BROKER %s", broker_addr_str());
     sh1122_draw_text(&s_oled, 0, 36, 2, line);
     snprintf(line, sizeof(line), "MQTT %s  UP %lus",
              g_mqtt_connected ? "OK" : "--", (unsigned long)uptime_s);
@@ -466,8 +547,21 @@ static void sensors_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(500));
 
     printf("\n[bringup] sensors_task on core=%u\n", (unsigned)get_core_num());
-    printf("[bringup] UUID = %s\n", RMMS_DEVICE_UUID);
-    printf("[bringup] broker = %s:%d\n", BROKER_IP, (int)BROKER_PORT);
+
+    /* Load identity + per-deployment config from littlefs. Anything missing
+     * means the device wasn't provisioned — block with a loud error rather
+     * than fall through to Wi-Fi/MQTT with garbage. */
+    if (storage_mount() != ERR_OK)
+        for (;;) { printf("[bringup] storage_mount FAILED\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+    if (identity_load(&g_id) != ERR_OK)
+        for (;;) { printf("[bringup] identity_load FAILED — not provisioned\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+    if (cfg_load_wifi(&g_wifi) != ERR_OK)
+        for (;;) { printf("[bringup] cfg_load_wifi FAILED — /cfg/wifi.json missing\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+    if (cfg_load_broker(&g_broker) != ERR_OK)
+        for (;;) { printf("[bringup] cfg_load_broker FAILED — /cfg/broker.json missing\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+
+    printf("[bringup] UUID = %s\n", g_id.uuid);
+    printf("[bringup] broker = %s:%u\n", broker_addr_str(), (unsigned)g_broker.port);
 
     /* ── I²C + sensor probes (independent of network) ────────────────── */
     i2c_bus_init();
@@ -490,19 +584,12 @@ static void sensors_task(void *arg)
 #endif
 
     /* ── Wi-Fi + mTLS + MQTT ─────────────────────────────────────────── */
-    if (WIFI_SSID[0] == '\0') {
-        for (;;) {
-            printf("[bringup] NO WIFI CREDENTIALS COMPILED IN\n");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
-
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS) != 0) {
         for (;;) { printf("[bringup] cyw43 init FAILED\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
     }
     cyw43_arch_enable_sta_mode();
-    printf("[bringup] connecting to SSID '%s' ...\n", WIFI_SSID);
-    int rc = cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PSK,
+    printf("[bringup] connecting to SSID '%s' ...\n", g_wifi.ssid);
+    int rc = cyw43_arch_wifi_connect_timeout_ms(g_wifi.ssid, g_wifi.psk,
                                                 CYW43_AUTH_WPA2_AES_PSK, 30000);
     if (rc != 0) {
         for (;;) { printf("[bringup] wifi connect FAILED rc=%d\n", rc); vTaskDelay(pdMS_TO_TICKS(3000)); }
@@ -515,10 +602,26 @@ static void sensors_task(void *arg)
 
     mqtt_setup_and_connect();
 
-    /* ── 1 Hz publish loop ───────────────────────────────────────────── */
+    /* ── 1 Hz publish loop with auto-reconnect ───────────────────────── */
+    TickType_t next_reconnect_attempt = 0;
     for (uint32_t tick = 0; ; tick++) {
+        /* Some failure modes (broker hard-drop, network blip) take down the
+         * MQTT TCP connection without firing the disconnect callback. Use
+         * lwIP's own is_connected() as the source of truth. */
+        if (g_mqtt_connected && !mqtt_client_is_connected(g_mqtt)) {
+            printf("[bringup] mqtt_client_is_connected went false — marking down\n");
+            g_mqtt_connected = false;
+            s_reconnect_pending = true;
+        }
+
         if (!g_mqtt_connected) {
-            if ((tick % 5) == 0) printf("[bringup] waiting for MQTT CONNACK ...\n");
+            TickType_t now = xTaskGetTickCount();
+            if (s_reconnect_pending && now >= next_reconnect_attempt) {
+                mqtt_try_reconnect();
+                next_reconnect_attempt = now + pdMS_TO_TICKS(s_reconnect_backoff_ms);
+            } else if ((tick % 5) == 0) {
+                printf("[bringup] waiting for MQTT CONNACK ...\n");
+            }
         } else {
 #if SENSOR_ENV_ON
             publish_env_sample();

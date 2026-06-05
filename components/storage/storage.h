@@ -36,6 +36,9 @@ err_t storage_remove(const char *path);
 /* Check whether path exists. */
 bool  storage_exists(const char *path);
 
+/* Get the byte size of a file. Returns ERR_NOT_FOUND if absent. */
+err_t storage_size(const char *path, size_t *size_out);
+
 /* Debug: recursively print the filesystem tree (path, type, size) via the log,
  * for bring-up and on-device incident inspection over the serial console. */
 void  storage_dump(void);

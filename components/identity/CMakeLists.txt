@@ -6,4 +6,5 @@ target_link_libraries(identity PRIVATE
     board
     log
     storage
+    json
 )

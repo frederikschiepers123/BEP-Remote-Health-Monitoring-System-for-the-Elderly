@@ -224,119 +224,100 @@ pico_enable_stdio_usb(bringup_wifi 1)
 pico_enable_stdio_uart(bringup_wifi 0)
 pico_add_extra_outputs(bringup_wifi)
 
-# Step 6 — mTLS to broker + MQTT CONNECT + test publish.
-# Skips the over-USB cert upload flow (deferred) and bakes the device cert/key
-# + CA + UUID into the UF2 from a provisioning bundle. The bundle is produced
-# by scripts/provision_ca.sh; point CERTS_DIR at out/device-<uuid>/. Same
-# security stance as the WiFi creds: env-var → build → gitignored.
-if(NOT DEFINED CERTS_DIR AND DEFINED ENV{CERTS_DIR})
-    set(CERTS_DIR "$ENV{CERTS_DIR}")
+# Probe for the cyw43_arch + sys_freertos hang. Same code shape as
+# bringup_wifi but linked against pico_cyw43_arch_lwip_sys_freertos (the
+# production target per CLAUDE.md §2.1 / §7) and using the root lwipopts.h
+# (NO_SYS=0) — NOT the bringup-only override. See memory
+# project_cyw43_sys_freertos_hang for the prior diagnosis.
+add_executable(bringup_sys_freertos wifi_sysfree.c)
+target_link_libraries(bringup_sys_freertos PRIVATE
+    board
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_lwip_sys_freertos
+    pico_mbedtls
+    pico_lwip_mbedtls
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+foreach(_v WIFI_SSID WIFI_PSK)
+    if(NOT DEFINED ${_v} AND DEFINED ENV{${_v}})
+        set(${_v} "$ENV{${_v}}")
+    endif()
+endforeach()
+if(DEFINED WIFI_SSID)
+    target_compile_definitions(bringup_sys_freertos PRIVATE "WIFI_SSID=\"${WIFI_SSID}\"")
 endif()
-if(DEFINED CERTS_DIR)
-    # Resolve CERTS_DIR to an absolute path. Without this, a relative value
-    # (e.g. `out/device-<uuid>`) gets interpreted by add_custom_command's
-    # DEPENDS relative to the current binary dir (`build/test/bringup/`),
-    # so the build looks for `test/bringup/out/...` and fails.
-    get_filename_component(CERTS_DIR_ABS "${CERTS_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
-    set(_baked_h ${CMAKE_CURRENT_BINARY_DIR}/baked_certs.h)
-    add_custom_command(
-        OUTPUT  ${_baked_h}
-        COMMAND ${CMAKE_COMMAND} -E env python3
-                ${CMAKE_SOURCE_DIR}/scripts/bake_certs.py
-                ${CERTS_DIR_ABS} ${_baked_h}
-        DEPENDS ${CERTS_DIR_ABS}/ca.der
-                ${CERTS_DIR_ABS}/dev.crt
-                ${CERTS_DIR_ABS}/dev.key
-                ${CERTS_DIR_ABS}/device.json
-                ${CMAKE_SOURCE_DIR}/scripts/bake_certs.py
-        COMMENT "Baking device certs from ${CERTS_DIR_ABS} into baked_certs.h"
-        VERBATIM
-    )
-    add_executable(bringup_mqtt mqtt_connect.c ${_baked_h})
-    target_include_directories(bringup_mqtt BEFORE PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/lwip   # bringup-only lwipopts.h (NO_SYS=1)
-        ${CMAKE_CURRENT_BINARY_DIR}        # baked_certs.h
-    )
-    target_link_libraries(bringup_mqtt PRIVATE
-        pico_stdlib
-        pico_stdio_usb
-        pico_cyw43_arch_lwip_threadsafe_background
-        pico_lwip_mqtt          # lwIP's built-in MQTT client (raw API; NO_SYS=1)
-        pico_lwip_mbedtls       # altcp_tls glue between lwIP and mbedTLS
-        pico_mbedtls            # mbedTLS proper
-        FreeRTOS-Kernel
-        FreeRTOS-Kernel-Heap4
-    )
-    foreach(_v WIFI_SSID WIFI_PSK BROKER_IP BROKER_PORT)
-        if(NOT DEFINED ${_v} AND DEFINED ENV{${_v}})
-            set(${_v} "$ENV{${_v}}")
-        endif()
-    endforeach()
-    if(DEFINED WIFI_SSID)
-        target_compile_definitions(bringup_mqtt PRIVATE "WIFI_SSID=\"${WIFI_SSID}\"")
-    endif()
-    if(DEFINED WIFI_PSK)
-        target_compile_definitions(bringup_mqtt PRIVATE "WIFI_PSK=\"${WIFI_PSK}\"")
-    endif()
-    if(DEFINED BROKER_IP)
-        target_compile_definitions(bringup_mqtt PRIVATE "BROKER_IP=\"${BROKER_IP}\"")
-    endif()
-    if(DEFINED BROKER_PORT)
-        target_compile_definitions(bringup_mqtt PRIVATE "BROKER_PORT=${BROKER_PORT}")
-    endif()
-    pico_enable_stdio_usb(bringup_mqtt 1)
-    pico_enable_stdio_uart(bringup_mqtt 0)
-    pico_add_extra_outputs(bringup_mqtt)
+if(DEFINED WIFI_PSK)
+    target_compile_definitions(bringup_sys_freertos PRIVATE "WIFI_PSK=\"${WIFI_PSK}\"")
+endif()
+pico_enable_stdio_usb(bringup_sys_freertos 1)
+pico_enable_stdio_uart(bringup_sys_freertos 0)
+pico_add_extra_outputs(bringup_sys_freertos)
 
-    # ── Sensor publish bring-up — extends mqtt_connect with real sensor reads ──
-    # Same TLS+MQTT path as bringup_mqtt; adds I²C bus init + BME280 sampling
-    # + per-sensor topic publish (rmms/<uuid>/env now; /air and /radar coming).
-    # bme280.c is pulled in directly to avoid the sensor_env wrapper's FreeRTOS
-    # queue / app_config dependencies (those belong to firmware-proper, M8).
-    add_executable(bringup_sensors
-        sensors_publish.c
-        ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
-        ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
-        ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
-        ${_baked_h}
-    )
-    target_include_directories(bringup_sensors BEFORE PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/lwip
-        ${CMAKE_CURRENT_BINARY_DIR}
-    )
-    target_include_directories(bringup_sensors PRIVATE
-        ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
-        ${CMAKE_SOURCE_DIR}/components/sensor_air   # ens160.h
-        ${CMAKE_SOURCE_DIR}/components/ui_oled      # sh1122.h
-    )
-    target_link_libraries(bringup_sensors PRIVATE
-        board
-        log
-        pico_stdlib
-        pico_stdio_usb
-        hardware_i2c
-        pico_cyw43_arch_lwip_threadsafe_background
-        pico_lwip_mqtt
-        pico_lwip_mbedtls
-        pico_mbedtls
-        FreeRTOS-Kernel
-        FreeRTOS-Kernel-Heap4
-    )
-    if(DEFINED WIFI_SSID)
-        target_compile_definitions(bringup_sensors PRIVATE "WIFI_SSID=\"${WIFI_SSID}\"")
-    endif()
-    if(DEFINED WIFI_PSK)
-        target_compile_definitions(bringup_sensors PRIVATE "WIFI_PSK=\"${WIFI_PSK}\"")
-    endif()
-    if(DEFINED BROKER_IP)
-        target_compile_definitions(bringup_sensors PRIVATE "BROKER_IP=\"${BROKER_IP}\"")
-    endif()
-    if(DEFINED BROKER_PORT)
-        target_compile_definitions(bringup_sensors PRIVATE "BROKER_PORT=${BROKER_PORT}")
-    endif()
-    pico_enable_stdio_usb(bringup_sensors 1)
-    pico_enable_stdio_uart(bringup_sensors 0)
-    pico_add_extra_outputs(bringup_sensors)
-else()
-    message(STATUS "bringup_mqtt + bringup_sensors: skipped (set CERTS_DIR=out/device-<uuid> to build)")
-endif()
+# Step 6 — mTLS to broker + MQTT CONNECT + test publish.
+# Identity (UUID + cert chain) and config (Wi-Fi, broker) live in littlefs,
+# provisioned with bringup_provision + scripts/provision_device.py. Reflashing
+# either UF2 below leaves /certs and /cfg untouched.
+add_executable(bringup_mqtt mqtt_connect.c)
+target_include_directories(bringup_mqtt BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lwip   # bringup-only lwipopts.h (NO_SYS=1)
+)
+target_link_libraries(bringup_mqtt PRIVATE
+    board
+    log
+    storage
+    identity
+    cfg
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt          # lwIP's built-in MQTT client (raw API; NO_SYS=1)
+    pico_lwip_mbedtls       # altcp_tls glue between lwIP and mbedTLS
+    pico_mbedtls            # mbedTLS proper
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_mqtt 1)
+pico_enable_stdio_uart(bringup_mqtt 0)
+pico_add_extra_outputs(bringup_mqtt)
+
+# ── Sensor publish bring-up — extends mqtt_connect with real sensor reads ──
+# Same TLS+MQTT path as bringup_mqtt; adds I²C bus init + BME280 + ENS160
+# sampling + per-sensor topic publish (rmms/<uuid>/env, /air; /radar NYI).
+# Driver .c files are pulled in directly to avoid the per-sensor wrapper
+# libraries' FreeRTOS queue / app_config dependencies (those belong to
+# firmware-proper, M8).
+add_executable(bringup_sensors
+    sensors_publish.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+    ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
+)
+target_include_directories(bringup_sensors BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lwip
+)
+target_include_directories(bringup_sensors PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
+    ${CMAKE_SOURCE_DIR}/components/sensor_air   # ens160.h
+    ${CMAKE_SOURCE_DIR}/components/ui_oled      # sh1122.h
+)
+target_link_libraries(bringup_sensors PRIVATE
+    board
+    log
+    storage
+    identity
+    cfg
+    pico_stdlib
+    pico_stdio_usb
+    hardware_i2c
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt
+    pico_lwip_mbedtls
+    pico_mbedtls
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_sensors 1)
+pico_enable_stdio_uart(bringup_sensors 0)
+pico_add_extra_outputs(bringup_sensors)

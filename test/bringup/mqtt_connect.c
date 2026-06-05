@@ -3,15 +3,14 @@
  * + test publish. Wi-Fi-only (USB tablet link still deferred per §2.1).
  *
  * Path:
- *   bake_certs.py @ CMake-time → baked_certs.h (CA, cert, key, UUID)
+ *   storage_mount() → identity_load() + cfg_load_wifi/broker() from littlefs
  *   wifi_task: stdio → cyw43_arch_init → connect_to_AP → DHCP → IP
- *   mqtt_task: build altcp_tls config from baked certs → mqtt_client_connect
+ *   mqtt_task: build altcp_tls config from /certs/* → mqtt_client_connect
  *              → on CONNACK, publish "hello" to rmms/<uuid>/log every 10 s
  *
- * This is the FAST bring-up: certs are compiled in. The real firmware reads
- * /certs/* from littlefs (uploaded via the deferred bringup_provision flow).
- * Same security stance as the WiFi creds in bringup_wifi: env-var at build
- * time, build/ is gitignored.
+ * Identity (UUID + cert chain) and per-deployment config (Wi-Fi creds,
+ * broker address) live in littlefs — provisioned once with bringup_provision
+ * + scripts/provision_device.py. Reflashing firmware never touches them.
  */
 #include "FreeRTOS.h"
 #include "task.h"
@@ -23,7 +22,9 @@
 #include "lwip/altcp_tls.h"
 #include "lwip/apps/mqtt.h"
 
-#include "baked_certs.h"   /* generated header: rmms_ca_der / dev_crt / dev_key + RMMS_DEVICE_UUID */
+#include "storage.h"
+#include "identity.h"
+#include "cfg.h"
 
 #include "mbedtls/platform_time.h"
 #include "mbedtls/x509_crt.h"
@@ -43,19 +44,6 @@ mbedtls_ms_time_t mbedtls_ms_time(void)
 /* mbedtls_hardware_poll is provided by pico-sdk's pico_mbedtls.c (linked via
  * the pico_mbedtls library), backed by get_rand_64(). Defining
  * MBEDTLS_ENTROPY_HARDWARE_ALT in mbedtls_config.h is enough to wire it. */
-
-#ifndef WIFI_SSID
-#define WIFI_SSID ""
-#endif
-#ifndef WIFI_PSK
-#define WIFI_PSK ""
-#endif
-#ifndef BROKER_IP
-#define BROKER_IP "192.168.2.21"
-#endif
-#ifndef BROKER_PORT
-#define BROKER_PORT 8883
-#endif
 
 /* FreeRTOSConfig.h required hooks. */
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
@@ -78,6 +66,12 @@ void vApplicationMallocFailedHook(void)
 static mqtt_client_t *g_mqtt;
 static volatile bool g_mqtt_connected = false;
 static volatile uint32_t g_mqtt_pub_count = 0;
+
+/* Identity + per-deployment config loaded from littlefs at task start. */
+static Identity   g_id;
+static CfgWifi    g_wifi;
+static CfgBroker  g_broker;
+static char       g_topic_log[80];
 
 static const char *mqtt_status_str(mqtt_connection_status_t s)
 {
@@ -113,18 +107,21 @@ static void mqtt_connect_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_
 
 static err_t mqtt_publish_hello(void)
 {
-    char topic[80];
     char payload[64];
-    int tn = snprintf(topic, sizeof(topic), "rmms/%s/log", RMMS_DEVICE_UUID);
-    int pn = snprintf(payload, sizeof(payload), "hello %lu", (unsigned long)g_mqtt_pub_count);
-    if (tn <= 0 || pn <= 0) return ERR_VAL;
+    int pn = snprintf(payload, sizeof(payload), "hello %lu",
+                      (unsigned long)g_mqtt_pub_count);
+    if (pn <= 0) return ERR_VAL;
 
     cyw43_arch_lwip_begin();
-    err_t e = mqtt_publish(g_mqtt, topic, payload, (u16_t)pn,
+    err_t e = mqtt_publish(g_mqtt, g_topic_log, payload, (u16_t)pn,
                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
     cyw43_arch_lwip_end();
     return e;
 }
+
+#define BLOCK_FATAL(fmt, ...) \
+    for (;;) { printf("[bringup] " fmt "\n", ##__VA_ARGS__); \
+               vTaskDelay(pdMS_TO_TICKS(3000)); }
 
 static void wifi_task(void *arg)
 {
@@ -136,35 +133,34 @@ static void wifi_task(void *arg)
     }
     vTaskDelay(pdMS_TO_TICKS(500));
     printf("\n[bringup] mqtt_task: host connected (core=%u)\n", (unsigned)get_core_num());
-    printf("[bringup] UUID = %s\n", RMMS_DEVICE_UUID);
-    printf("[bringup] broker = %s:%d\n", BROKER_IP, (int)BROKER_PORT);
-    printf("[bringup] baked: ca=%u dev_crt=%u dev_key=%u bytes\n",
-           rmms_ca_der_len, rmms_dev_crt_len, rmms_dev_key_len);
 
-    if (WIFI_SSID[0] == '\0') {
-        for (;;) {
-            printf("[bringup] NO WIFI CREDENTIALS — re-build with WIFI_SSID/WIFI_PSK set\n");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
+    /* Load identity + config from littlefs (factory-provisioned via
+     * bringup_provision + scripts/provision_device.py). */
+    if (storage_mount() != ERR_OK)
+        BLOCK_FATAL("storage_mount failed — was the device provisioned?");
+    if (identity_load(&g_id) != ERR_OK)
+        BLOCK_FATAL("identity_load failed — missing /certs or /cfg/device.json");
+    if (cfg_load_wifi(&g_wifi) != ERR_OK)
+        BLOCK_FATAL("cfg_load_wifi failed — missing /cfg/wifi.json");
+    if (cfg_load_broker(&g_broker) != ERR_OK)
+        BLOCK_FATAL("cfg_load_broker failed — missing /cfg/broker.json");
+
+    snprintf(g_topic_log, sizeof(g_topic_log), "rmms/%s/log", g_id.uuid);
+    printf("[bringup] UUID = %s\n", g_id.uuid);
+    printf("[bringup] broker = %s:%u (host='%s')\n",
+           g_broker.ip[0] ? g_broker.ip : g_broker.host,
+           (unsigned)g_broker.port, g_broker.host);
+    printf("[bringup] certs: ca=%u dev_crt=%u dev_key=%u bytes\n",
+           (unsigned)g_id.ca_len, (unsigned)g_id.dev_crt_len,
+           (unsigned)g_id.dev_key_len);
 
     int rc = cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS);
-    if (rc != 0) {
-        for (;;) {
-            printf("[bringup] cyw43_arch_init FAILED rc=%d\n", rc);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
+    if (rc != 0) BLOCK_FATAL("cyw43_arch_init FAILED rc=%d", rc);
     cyw43_arch_enable_sta_mode();
-    printf("[bringup] connecting to SSID '%s' ...\n", WIFI_SSID);
-    rc = cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PSK,
+    printf("[bringup] connecting to SSID '%s' ...\n", g_wifi.ssid);
+    rc = cyw43_arch_wifi_connect_timeout_ms(g_wifi.ssid, g_wifi.psk,
                                             CYW43_AUTH_WPA2_AES_PSK, 30000);
-    if (rc != 0) {
-        for (;;) {
-            printf("[bringup] wifi connect FAILED rc=%d\n", rc);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
+    if (rc != 0) BLOCK_FATAL("wifi connect FAILED rc=%d", rc);
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     printf("[bringup] CONNECTED — IP = %s\n", ip ? ip4addr_ntoa(ip) : "(none)");
 
@@ -177,66 +173,52 @@ static void wifi_task(void *arg)
     {
         mbedtls_x509_crt probe_crt;
         mbedtls_x509_crt_init(&probe_crt);
-        int prc = mbedtls_x509_crt_parse(&probe_crt, rmms_ca_der, rmms_ca_der_len);
+        int prc = mbedtls_x509_crt_parse(&probe_crt, g_id.ca_der, g_id.ca_len);
         printf("[bringup] probe: mbedtls_x509_crt_parse(CA)  rc=%d (-0x%04x)\n", prc, (unsigned)-prc);
-        prc = mbedtls_x509_crt_parse(&probe_crt, rmms_dev_crt, rmms_dev_crt_len);
+        prc = mbedtls_x509_crt_parse(&probe_crt, g_id.dev_crt_der, g_id.dev_crt_len);
         printf("[bringup] probe: mbedtls_x509_crt_parse(crt) rc=%d (-0x%04x)\n", prc, (unsigned)-prc);
         mbedtls_x509_crt_free(&probe_crt);
 
         mbedtls_pk_context probe_pk;
         mbedtls_pk_init(&probe_pk);
-        prc = mbedtls_pk_parse_key(&probe_pk, rmms_dev_key, rmms_dev_key_len, NULL, 0, NULL, NULL);
+        prc = mbedtls_pk_parse_key(&probe_pk, g_id.dev_key_der, g_id.dev_key_len,
+                                   NULL, 0, NULL, NULL);
         printf("[bringup] probe: mbedtls_pk_parse_key        rc=%d (-0x%04x)\n", prc, (unsigned)-prc);
         mbedtls_pk_free(&probe_pk);
     }
 
     printf("[bringup] building altcp_tls config (mTLS, ECDSA P-256)\n");
     struct altcp_tls_config *tls_cfg = altcp_tls_create_config_client_2wayauth(
-        rmms_ca_der,  rmms_ca_der_len,
-        rmms_dev_key, rmms_dev_key_len,
-        NULL, 0,                          /* private key password */
-        rmms_dev_crt, rmms_dev_crt_len);
-    if (!tls_cfg) {
-        for (;;) {
-            printf("[bringup] altcp_tls_create_config_client_2wayauth FAILED\n");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
+        g_id.ca_der,      g_id.ca_len,
+        g_id.dev_key_der, g_id.dev_key_len,
+        NULL, 0,                                  /* private key password */
+        g_id.dev_crt_der, g_id.dev_crt_len);
+    if (!tls_cfg) BLOCK_FATAL("altcp_tls_create_config_client_2wayauth FAILED");
     printf("[bringup] altcp_tls config ok\n");
 
     g_mqtt = mqtt_client_new();
-    if (!g_mqtt) {
-        for (;;) {
-            printf("[bringup] mqtt_client_new FAILED\n");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
+    if (!g_mqtt) BLOCK_FATAL("mqtt_client_new FAILED");
 
     struct mqtt_connect_client_info_t ci;
     memset(&ci, 0, sizeof(ci));
-    ci.client_id  = RMMS_DEVICE_UUID;     /* must match cert CN per CLAUDE.md §9.4 */
+    ci.client_id  = g_id.uuid;        /* must match cert CN per CLAUDE.md §9.4 */
     ci.keep_alive = 60;
     ci.tls_config = tls_cfg;
 
+    /* Use literal IP when present (no DNS); host-only path is left for the
+     * production firmware that wires up mDNS resolution per §8.2. */
+    const char *broker_addr_str = g_broker.ip[0] ? g_broker.ip : g_broker.host;
     ip_addr_t broker_addr;
-    if (!ipaddr_aton(BROKER_IP, &broker_addr)) {
-        for (;;) {
-            printf("[bringup] BROKER_IP '%s' not parseable\n", BROKER_IP);
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
-    printf("[bringup] mqtt_client_connect → %s:%d (TLS + MQTT CONNECT)\n",
-           BROKER_IP, (int)BROKER_PORT);
+    if (!ipaddr_aton(broker_addr_str, &broker_addr))
+        BLOCK_FATAL("broker addr '%s' not an IP literal — mDNS NYI in bringup",
+                    broker_addr_str);
+    printf("[bringup] mqtt_client_connect → %s:%u (TLS + MQTT CONNECT)\n",
+           broker_addr_str, (unsigned)g_broker.port);
     cyw43_arch_lwip_begin();
-    err_t e = mqtt_client_connect(g_mqtt, &broker_addr, BROKER_PORT,
+    err_t e = mqtt_client_connect(g_mqtt, &broker_addr, g_broker.port,
                                   mqtt_connect_cb, NULL, &ci);
     cyw43_arch_lwip_end();
-    if (e != ERR_OK) {
-        for (;;) {
-            printf("[bringup] mqtt_client_connect immediate err=%d\n", (int)e);
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
+    if (e != ERR_OK) BLOCK_FATAL("mqtt_client_connect immediate err=%d", (int)e);
     printf("[bringup] mqtt_client_connect issued, waiting for CONNACK ...\n");
 
     /* ── Steady-state heartbeat ─────────────────────────────────────────────

@@ -215,6 +215,15 @@ bool storage_exists(const char *path) {
     return lfs_stat(&lfs, path, &info) == LFS_ERR_OK;
 }
 
+err_t storage_size(const char *path, size_t *size_out) {
+    struct lfs_info info;
+    int rc = lfs_stat(&lfs, path, &info);
+    if (rc == LFS_ERR_NOENT) return ERR_NOT_FOUND;
+    if (rc != LFS_ERR_OK)    return ERR_FS;
+    if (size_out) *size_out = (size_t)info.size;
+    return ERR_OK;
+}
+
 /* Recursively list `path`. Depth-bounded; the §11 layout is only one level
  * deep, so 4 is generous. Each frame holds an lfs_info (~256 B), so this is a
  * debug-only helper — call it from a context with ample stack. */
