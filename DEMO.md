@@ -11,88 +11,133 @@ Total demo time: **~12 minutes**, plus questions.
 
 ---
 
-## 0. Setup (~5 min once the one-time pieces are in place)
+## 0. Setup
 
 Network: **phone's mobile hotspot** as the private Wi-Fi (proven at
-`172.20.10.x`). Both broker cert SAN and the firmware's compiled-in
-`BROKER_IP` must match the tablet's hotspot IP, which the hotspot
-reassigns each reconnect.
+`172.20.10.x`). The tablet's IP changes every hotspot reconnect, which
+means the broker cert SAN and the Pico's `/cfg/broker.json` both need
+to track today's value. The script below does that automatically.
 
-You need: phone hotspot on, laptop + tablet + Pico 2 W on it, WSL2 terminal.
+You need: phone hotspot on, laptop + tablet + Pico 2 W on it, one
+WSL2 terminal, one PowerShell window.
 
-### One-time prep (do once per laptop, never again)
+### 0.0 One-time prep (do once per laptop, never again)
 
 ```bash
 # Passwordless SSH to the tablet (asks Termux password once):
 ./scripts/setup_tablet_ssh.sh <tablet-ip>
+```
 
+```powershell
 # Windows-side port forward so the tablet can reach MM² on the laptop
 # (run from PowerShell as Administrator):
-netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8080 \
-    connectaddress=$(wsl -d Ubuntu -e bash -c 'ip -4 addr show eth0 | grep inet | awk "{print \$2}" | cut -d/ -f1') \
+netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8080 `
+    connectaddress=$(wsl -d Ubuntu -e bash -c "ip -4 addr show eth0 | grep inet | awk '{print \$2}' | cut -d/ -f1") `
     connectport=8080
-netsh advfirewall firewall add rule name="MM2 8080" dir=in action=allow \
+netsh advfirewall firewall add rule name="MM2 8080" dir=in action=allow `
     protocol=TCP localport=8080
 ```
 
-### Step 0a — get IPs
+### 0.1 Get today's tablet IP
 
-Tablet (Termux):
+In Termux on the tablet:
+
 ```bash
 pgrep sshd || sshd
 ifconfig 2>/dev/null | grep 'inet ' | grep -v 127.0.0.1
 ```
 
-Note `<TIP>` (tablet's hotspot IP, `172.20.10.X`). Verify from the laptop:
-```bash
-ping -c 2 <TIP>
-```
+Note `<TIP>` (something like `172.20.10.14`).
 
-### Step 0b — bring up the broker
+### 0.2 Laptop-side bring-up — one command
 
 ```bash
-./scripts/refresh_broker.sh <TIP>
+./scripts/demo_start.sh <TIP>
 ```
 
-That single command re-issues the broker cert for today's `<TIP>`, pushes
-it, restarts Mosquitto, and verifies port 8883 answers — takes ~8 seconds.
-Output ends with `OK — broker reachable on <TIP>:8883`.
+What this does (~15 s + one MagicMirror² boot):
 
-### Step 0c — bring up MagicMirror² on the laptop
+1. Re-mints the broker cert for `<TIP>` and bounces Mosquitto on the
+   tablet over SSH.
+2. Edits `MagicMirror/config/config.js` to point the bridge at
+   `mqtts://<TIP>:8883`.
+3. Rewrites `broker.json` in the most-recent `out/device-*/` bundle
+   to use `<TIP>` and copies the whole bundle + `provision_device.py`
+   to `C:\Users\frede\`.
+4. Kills any stale MagicMirror on `:8080` and relaunches it in the
+   background, logging to `/tmp/mm2.log`.
+
+When it returns, the laptop side is done. Output ends with the manual
+checklist for the next step.
+
+### 0.3 Pico-side bring-up — three drag-and-drops
+
+All from PowerShell at `C:\Users\frede\`. The UF2s should already be
+present from the last build; if not, rebuild with
+`cmake --build build --target bringup_provision bringup_sensors -j$(nproc)`
+and copy them across.
+
+1. **Push today's broker config to the Pico's littlefs.**
+   Hold BOOTSEL on the Pico, plug it in, drop `bringup_provision.uf2`
+   onto the RP2350 drive. Then in PowerShell:
+
+   ```powershell
+   cd C:\Users\frede
+   py -3.13 provision_device.py COM<N> device-<uuid>
+   ```
+
+   (Replace `COM<N>` with whatever Device Manager shows after the
+   Pico re-enumerates. The script ends with `all artefacts verified ✓`
+   and reboots the device. Takes ~3 s.)
+
+2. **Flash the running firmware.** BOOTSEL again, drop
+   `bringup_sensors.uf2`. The Pico boots, reads identity + WiFi +
+   broker from littlefs, joins WiFi, completes mTLS to the broker,
+   and starts publishing `rmms/<uuid>/env`, `/air`, `/radar` at
+   1 Hz / 0.2 Hz / 1 Hz.
+
+3. **Open the mirror in a browser.** `http://localhost:8080` on the
+   laptop, or `http://172.20.10.2:8080` (laptop IP on the hotspot) on
+   the tablet. Tiles populate within ~1 s of first publish.
+
+### 0.4 Watch it work
 
 ```bash
-cd ~/projects/BEP-Remote-Health-Monitoring-System-for-the-Elderly/MagicMirror
-nohup npm run server > /tmp/mm2.log 2>&1 &
-disown
-sleep 6 && tail -5 /tmp/mm2.log
+tail -f /tmp/mm2.log
 ```
 
-You should see `Ready to go!` and (once the browser loads) the bridge
-prints `MQTT connected — subscribing to: rmms/+/+` then `Subscribed.`
+You should see, in order:
 
-Edit `MagicMirror/config/config.js` to point the bridge at today's
-`<TIP>` if it has changed since last session (search-replace the
-`mqtts://...` URL).
-
-### Step 0d — rebuild + flash the firmware
-
-```bash
-DEVDIR=$(ls -dt out/device-* | head -1)
-echo "device bundle: $DEVDIR"
-rm -rf build
-CERTS_DIR="$DEVDIR" \
-WIFI_SSID="<hotspot-ssid>" WIFI_PSK="<hotspot-password>" \
-BROKER_IP="<TIP>" \
-    cmake -S . -B build -DPICO_BOARD=pico2_w -DBUILD_BRINGUP=ON
-cmake --build build --target bringup_sensors -j$(nproc)
-cp build/test/bringup/bringup_sensors.uf2 /mnt/c/Users/frede/
+```
+Ready to go!  ...
+MMM-CustomMQTTBridge connecting: mqtts://172.20.10.14:8883 TLS=true ...
+MQTT connected — subscribing to: [ 'rmms/+/+' ]
+Subscribed.
 ```
 
-Drag `C:\Users\frede\bringup_sensors.uf2` onto the Pico's BOOTSEL drive,
-replug. Open PuTTY on COM3.
+The Pico's PuTTY console (COM<N>, 115200) shows:
 
-Within 30 s you should see the Pico publishing `env T=…` every 1 s, and
-the tablet's Mosquitto window logging `Received PUBLISH from <uuid>` lines.
+```
+[bringup] UUID = <uuid>
+[bringup] broker = 172.20.10.14:8883
+[bringup] CONNECTED — IP = 172.20.10.X
+[bringup] MQTT CONNACK status=0 ACCEPTED
+[bringup] env T=22.6C H=45.7% P=1014.2hPa seq=1
+[bringup] radar pres=1 dist=287mm BR=21.0 HR=89.0 q=0 seq=1
+```
+
+On the tablet's Mosquitto window you see `Received PUBLISH from
+<uuid>` lines for `/env`, `/air`, `/radar`, and `/status`.
+
+### 0.5 If something looks wrong
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Pico keeps printing `mqtt reconnect → … (backoff …)` | broker IP in `broker.json` doesn't match today's `<TIP>` | re-run §0.2 + §0.3 step 1 |
+| Bridge log says `Hostname/IP does not match certificate's altnames` | broker cert SAN doesn't include today's `<TIP>` | re-run §0.2 (it re-mints the cert) |
+| Bridge log says `ECONNREFUSED` | Mosquitto not running on tablet | re-run §0.2 (it restarts mosquitto) |
+| MagicMirror says `PORT IN USE: 8080` | old MM² process still bound | `ss -tlnp | grep 8080`, `kill <pid>`, rerun `npm run server` from `MagicMirror/` |
+| Tiles show "Measuring..." but PuTTY shows publishes | bridge not connected to broker (TLS / IP / cert mismatch) | `tail /tmp/mm2.log`, fix per the row above |
 
 ---
 
