@@ -206,13 +206,19 @@ behind a common `radar_driver_t` v-table. Selection is by config flag at
 (probing is fragile on noisy UART lines and the two protocols share no magic
 bytes). See §7.4.
 
-**Note on shared framing:** The audit confirms the DFRobot C1001 uses Andar/
-AI-Thinker mmWave framing — `[0x53][0x59][con][cmd][len_H][len_L][payload][cksum][0x54][0x43]`
-at 115200 baud. Seeed's MR60BHA2 documentation indicates the same framing
-family. If bring-up confirms both share the framing layer (high but unverified
-likelihood), refactor the two drivers to share a `radar_andar_frame.c` framing
-helper, with `radar_bha2.c` and `radar_c1001.c` differing only in command tables
-and metric parsing. **Do not assume this until verified on bench.**
+**Note on framing (bench-resolved):** The DFRobot C1001 uses Andar/AI-Thinker
+framing — `[0x53][0x59][con][cmd][len_H][len_L][payload][cksum][0x54][0x43]`
+at 115200 baud. **The Seeed MR60BHA2 does NOT share that framing.** Bring-up
+of the live module showed a different layout:
+
+  `[0x01][SEQ_H][SEQ_L][LEN_H][LEN_L][TYPE_H][TYPE_L][HDR_CKSUM]`
+  ` ── payload (LEN bytes) ── [DATA_CKSUM]`
+
+with `~XOR` checksums over the 7-byte pre-checksum header and over the
+payload respectively. The drivers therefore stay independent (no shared
+`radar_andar_frame.c`); each one parses its own protocol. The
+`radar_driver_t` v-table (§7.4) is still the right abstraction — it just
+sits one layer above the framing, on the parsed `RadarSample`.
 
 ### 3.3 Power
 - **5 V mains → MCU; MCU 3V3 rail powers BME280, OLED, LDR, buttons, LEDs, IR camera.**
@@ -1168,9 +1174,10 @@ Resolve each, then strip the TODO.
 
 1. **OLED controller.** Almost certainly SH1106 at 1.3″, but confirm by reading
    the bare silkscreen on the actual part.
-2. **Radar framing parity.** Verify on bench whether MR60BHA2 and C1001 share
-   the Andar `0x53 0x59` / `0x54 0x43` framing. If yes, lift framing to a
-   shared helper (§3.2 note). If no, keep fully separate drivers.
+2. ~~**Radar framing parity.**~~ **Resolved.** Bench bring-up of a live
+   MR60BHA2 confirmed it does NOT use Andar `0x53 0x59` / `0x54 0x43` framing.
+   It uses its own 8-byte SOF-`0x01` header with `~XOR` checksums; see §3.2.
+   The two drivers stay fully separate; no shared framing helper.
 3. **Tablet bridge ownership.** Who writes the `/dev/ttyACMx ↔ localhost:8883`
    transparent byte pipe on the tablet? Not this repo, but it blocks
    integration testing. Likely a small Python or Go service in the tablet repo.

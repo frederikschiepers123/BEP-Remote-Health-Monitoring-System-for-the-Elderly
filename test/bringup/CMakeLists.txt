@@ -292,15 +292,17 @@ add_executable(bringup_sensors
     sensors_publish.c
     ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
     ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
     ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
 )
 target_include_directories(bringup_sensors BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lwip
 )
 target_include_directories(bringup_sensors PRIVATE
-    ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
-    ${CMAKE_SOURCE_DIR}/components/sensor_air   # ens160.h
-    ${CMAKE_SOURCE_DIR}/components/ui_oled      # sh1122.h
+    ${CMAKE_SOURCE_DIR}/components/sensor_env    # bme280.h
+    ${CMAKE_SOURCE_DIR}/components/sensor_air    # ens160.h
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar  # radar_driver.h
+    ${CMAKE_SOURCE_DIR}/components/ui_oled       # sh1122.h
 )
 target_link_libraries(bringup_sensors PRIVATE
     board
@@ -311,6 +313,8 @@ target_link_libraries(bringup_sensors PRIVATE
     pico_stdlib
     pico_stdio_usb
     hardware_i2c
+    hardware_uart
+    hardware_gpio
     pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
     pico_lwip_mbedtls

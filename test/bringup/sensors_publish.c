@@ -35,10 +35,12 @@
 #include "bme280.h"
 #include "ens160.h"
 #include "sh1122.h"
+#include "radar_driver.h"
 #include "err.h"
 
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
+#include "hardware/uart.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +52,9 @@
 #endif
 #ifndef SENSOR_AIR_ON
 #define SENSOR_AIR_ON   1
+#endif
+#ifndef SENSOR_RADAR_ON
+#define SENSOR_RADAR_ON 1
 #endif
 #ifndef OLED_ON
 #define OLED_ON         1
@@ -92,6 +97,7 @@ static ip_addr_t                      s_broker_addr;
 static char                           s_status_topic[80] = "";
 static char                           s_topic_env[80] = "";
 static char                           s_topic_air[80] = "";
+static char                           s_topic_radar[80] = "";
 static volatile bool                  s_reconnect_pending = false;
 static uint32_t                       s_reconnect_backoff_ms = 1000;
 
@@ -175,6 +181,18 @@ static uint32_t s_env_seq = 0;
 static Ens160 s_ens;
 static bool   s_ens_ok = false;
 static uint32_t s_air_seq = 0;
+#endif
+#if SENSOR_RADAR_ON
+static radar_driver_t *s_radar = NULL;
+static bool            s_radar_ok = false;
+static uint32_t        s_radar_seq = 0;
+#if OLED_ON
+static volatile float    s_disp_heart = 0.0f, s_disp_breath = 0.0f;
+static volatile uint32_t s_disp_dist_mm = 0;
+static volatile bool     s_disp_radar_pres = false;
+static volatile bool     s_disp_radar_have = false;
+static volatile uint8_t  s_disp_radar_q   = 3;
+#endif
 #endif
 
 /* env_sample_encode follows the snprintf template in CLAUDE.md §9.2.
@@ -309,6 +327,89 @@ static void publish_air_sample(void)
 }
 #endif /* SENSOR_AIR_ON */
 
+#if SENSOR_RADAR_ON
+/* radar JSON encoder per CLAUDE.md §9.2.2:
+ * {"ts_us":...,"wall_ms":...,"seq":...,"q":...,
+ *  "v":{"presence":bool,"distance_mm":int|null,"breath_bpm":float|null,
+ *       "heart_bpm":float|null}}
+ * §9.2.3 lets us emit `null` when the radar didn't produce that field
+ * recently; we do that when distance_mm == 0 (sentinel from the driver). */
+static int radar_sample_encode(char *buf, size_t cap,
+                               uint64_t ts_us, int64_t wall_ms,
+                               uint32_t seq, uint8_t q,
+                               const RadarSample *s)
+{
+    char dist[16];
+    if (s->distance_mm == 0u) snprintf(dist, sizeof(dist), "null");
+    else                       snprintf(dist, sizeof(dist), "%lu",
+                                        (unsigned long)s->distance_mm);
+    /* Heart/breath: encode as null if the driver returned 0.0 (no fresh
+     * latched value). Keeps the mirror tile in "—" instead of showing 0. */
+    char hb[16], br[16];
+    if (s->heart_bpm  > 0.0f) snprintf(hb, sizeof(hb), "%.1f", (double)s->heart_bpm);
+    else                       snprintf(hb, sizeof(hb), "null");
+    if (s->breath_rpm > 0.0f) snprintf(br, sizeof(br), "%.1f", (double)s->breath_rpm);
+    else                       snprintf(br, sizeof(br), "null");
+
+    int n = snprintf(buf, cap,
+        "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%u,\"q\":%u,"
+        "\"v\":{\"presence\":%s,\"distance_mm\":%s,"
+              "\"breath_bpm\":%s,\"heart_bpm\":%s}}",
+        (unsigned long long)ts_us, (long long)wall_ms,
+        (unsigned)seq, (unsigned)q,
+        s->presence ? "true" : "false", dist, br, hb);
+    return (n > 0 && (size_t)n < cap) ? n : -1;
+}
+
+static void publish_radar_sample(void)
+{
+    if (!s_radar_ok) return;
+
+    RadarSample s;
+    /* 800 ms budget — short enough to leave headroom in the 1 Hz tick,
+     * long enough to almost always catch a fresh breath/heart frame. */
+    err_t e = s_radar->read_sample(s_radar->ctx, &s, 800);
+    uint8_t q = s.q;
+    if (e == ERR_TIMEOUT) {
+        /* No frames in this window: keep going but mark invalid. The driver
+         * sets q=3 in this case already. */
+    } else if (e != ERR_OK) {
+        printf("[bringup] radar read failed rc=%d\n", (int)e);
+        q = 3;
+    }
+
+    char payload[256];
+    int pn = radar_sample_encode(payload, sizeof(payload),
+                                 time_us_64(), -1,
+                                 ++s_radar_seq, q, &s);
+    if (pn < 0) {
+        printf("[bringup] radar encode overflow\n");
+        return;
+    }
+
+    cyw43_arch_lwip_begin();
+    err_t pe = mqtt_publish(g_mqtt, s_topic_radar, payload, (u16_t)pn,
+                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+    cyw43_arch_lwip_end();
+    if (pe != ERR_OK) {
+        printf("[bringup] radar mqtt_publish immediate rc=%d\n", (int)pe);
+    } else if (q == 0) {
+        printf("[bringup] radar pres=%d dist=%lumm BR=%.1f HR=%.1f q=%u seq=%u\n",
+               (int)s.presence, (unsigned long)s.distance_mm,
+               (double)s.breath_rpm, (double)s.heart_bpm, q,
+               (unsigned)s_radar_seq);
+    }
+#if OLED_ON
+    s_disp_heart   = s.heart_bpm;
+    s_disp_breath  = s.breath_rpm;
+    s_disp_dist_mm = s.distance_mm;
+    s_disp_radar_pres = s.presence;
+    s_disp_radar_q    = q;
+    s_disp_radar_have = (q != 3);
+#endif
+}
+#endif /* SENSOR_RADAR_ON */
+
 /* ── Initialisation helpers ─────────────────────────────────────────────── */
 
 static void i2c_bus_init(void)
@@ -357,6 +458,7 @@ static void mqtt_setup_and_connect(void)
     snprintf(s_status_topic, sizeof(s_status_topic), "rmms/%s/status", g_id.uuid);
     snprintf(s_topic_env,    sizeof(s_topic_env),    "rmms/%s/env",    g_id.uuid);
     snprintf(s_topic_air,    sizeof(s_topic_air),    "rmms/%s/air",    g_id.uuid);
+    snprintf(s_topic_radar,  sizeof(s_topic_radar),  "rmms/%s/radar",  g_id.uuid);
 
     memset(&s_ci, 0, sizeof(s_ci));
     s_ci.client_id  = g_id.uuid;
@@ -582,6 +684,16 @@ static void sensors_task(void *arg)
     s_oled_ok = (eo == ERR_OK);
     printf("[bringup] SH1122 init %s (rc=%d)\n", s_oled_ok ? "OK" : "FAILED", (int)eo);
 #endif
+#if SENSOR_RADAR_ON
+    /* For now the bring-up only supports the BHA2; C1001 selection lives in
+     * /cfg/sensors.json but is not exercised here yet. */
+    s_radar = radar_bha2_driver();
+    err_t er = s_radar ? s_radar->init(s_radar->ctx, BOARD_RADAR_UART_INST) : ERR_FAIL;
+    s_radar_ok = (er == ERR_OK);
+    printf("[bringup] radar(%s) init %s (rc=%d)\n",
+           s_radar ? s_radar->name : "?",
+           s_radar_ok ? "OK" : "FAILED", (int)er);
+#endif
 
     /* ── Wi-Fi + mTLS + MQTT ─────────────────────────────────────────── */
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS) != 0) {
@@ -631,6 +743,12 @@ static void sensors_task(void *arg)
              * once a second, but the AQI / CO2 / TVOC change slowly and the
              * mirror UI doesn't need 1 Hz updates. Reduces broker load. */
             if ((tick % 5) == 0) publish_air_sample();
+#endif
+#if SENSOR_RADAR_ON
+            /* Radar at 1 Hz — heart/breath change visibly that fast and the
+             * tile should track. read_sample inside publish_radar_sample
+             * consumes up to 800 ms of UART, dovetailing with the 1 Hz tick. */
+            publish_radar_sample();
 #endif
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
