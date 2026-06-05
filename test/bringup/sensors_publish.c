@@ -32,8 +32,9 @@
 #include "mbedtls/platform_time.h"
 
 #include "board_pico2wh.h"
-#include "bme280.h"
+#include "env_driver.h"
 #include "ens160.h"
+#include "bh1750.h"
 #include "sh1122.h"
 #include "radar_driver.h"
 #include "err.h"
@@ -55,6 +56,9 @@
 #endif
 #ifndef SENSOR_RADAR_ON
 #define SENSOR_RADAR_ON 1
+#endif
+#ifndef SENSOR_LIGHT_ON
+#define SENSOR_LIGHT_ON 1
 #endif
 #ifndef OLED_ON
 #define OLED_ON         1
@@ -98,6 +102,7 @@ static char                           s_status_topic[80] = "";
 static char                           s_topic_env[80] = "";
 static char                           s_topic_air[80] = "";
 static char                           s_topic_radar[80] = "";
+static char                           s_topic_light[80] = "";
 static volatile bool                  s_reconnect_pending = false;
 static uint32_t                       s_reconnect_backoff_ms = 1000;
 
@@ -173,14 +178,22 @@ static void mqtt_pub_cb(void *arg, err_t result)
 
 /* ── Sensor state ───────────────────────────────────────────────────────── */
 #if SENSOR_ENV_ON
-static Bme280 s_bme;
-static bool   s_bme_ok = false;
-static uint32_t s_env_seq = 0;
+static env_driver_t *s_env = NULL;
+static bool          s_env_ok = false;
+static uint32_t      s_env_seq = 0;
+/* Tracks the most recent pressure-validity flag so the OLED can show "—"
+ * for AHT21 builds where pressure is unavailable. */
+static bool          s_env_has_pres = false;
 #endif
 #if SENSOR_AIR_ON
 static Ens160 s_ens;
 static bool   s_ens_ok = false;
 static uint32_t s_air_seq = 0;
+#endif
+#if SENSOR_LIGHT_ON
+static Bh1750  s_bh;
+static bool    s_bh_ok = false;
+static uint32_t s_light_seq = 0;
 #endif
 #if SENSOR_RADAR_ON
 static radar_driver_t *s_radar = NULL;
@@ -202,40 +215,56 @@ static volatile uint8_t  s_disp_radar_q   = 3;
 #endif
 
 /* env_sample_encode follows the snprintf template in CLAUDE.md §9.2.
+ * pres_hpa is rendered as null when pres_valid is false (AHT21 path), per
+ * §9.2.3 "If a value is unavailable, encode null or the documented sentinel".
  * Returns chars written (excluding NUL), or -1 on overflow. */
 #if SENSOR_ENV_ON
 static int env_sample_encode(char *buf, size_t cap,
                              uint64_t ts_us, int64_t wall_ms,
                              uint32_t seq, uint8_t q,
-                             float temp_c, float hum_pct, float pres_hpa)
+                             float temp_c, float hum_pct,
+                             float pres_hpa, bool pres_valid)
 {
+    char pres[16];
+    if (pres_valid) snprintf(pres, sizeof(pres), "%.3f", (double)pres_hpa);
+    else            snprintf(pres, sizeof(pres), "null");
     int n = snprintf(buf, cap,
         "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%u,\"q\":%u,"
-        "\"v\":{\"temp_c\":%.3f,\"hum_pct\":%.3f,\"pres_hpa\":%.3f}}",
+        "\"v\":{\"temp_c\":%.3f,\"hum_pct\":%.3f,\"pres_hpa\":%s}}",
         (unsigned long long)ts_us, (long long)wall_ms,
         (unsigned)seq, (unsigned)q,
-        (double)temp_c, (double)hum_pct, (double)pres_hpa);
+        (double)temp_c, (double)hum_pct, pres);
     return (n > 0 && (size_t)n < cap) ? n : -1;
 }
 
 static void publish_env_sample(void)
 {
-    if (!s_bme_ok) return;
+    if (!s_env_ok) return;
 
-    Bme280Sample s;
+    EnvSample s;
     uint8_t q = 0;
-    err_t e = bme280_read_sample(&s_bme, &s);
+    err_t e = s_env->read_sample(s_env->ctx, &s);
     if (e != ERR_OK) {
-        printf("[bringup] BME280 read failed rc=%d\n", (int)e);
+        printf("[bringup] env(%s) read failed rc=%d\n", s_env->name, (int)e);
         q = 3;                     /* invalid */
         s.temp_c = s.humidity_pct = s.pressure_hpa = 0.0f;
+        s.pressure_valid = false;
     }
+#if SENSOR_AIR_ON
+    /* Feed the ENS160's compensation registers from whichever env driver is
+     * active (CLAUDE.md §3.2). 1 Hz is plenty — the AQI math doesn't change
+     * meaningfully within that window. */
+    if (q == 0 && s_ens_ok) {
+        (void)ens160_set_compensation(&s_ens, s.temp_c, s.humidity_pct);
+    }
+#endif
 
     char payload[256];
     int pn = env_sample_encode(payload, sizeof(payload),
                                time_us_64(), -1,    /* wall_ms unknown */
                                ++s_env_seq, q,
-                               s.temp_c, s.humidity_pct, s.pressure_hpa);
+                               s.temp_c, s.humidity_pct,
+                               s.pressure_hpa, s.pressure_valid);
     if (pn < 0) {
         printf("[bringup] env encode overflow\n");
         return;
@@ -248,9 +277,17 @@ static void publish_env_sample(void)
     if (pe != ERR_OK) {
         printf("[bringup] env mqtt_publish immediate rc=%d\n", (int)pe);
     } else if (q == 0) {
-        printf("[bringup] env T=%.2fC H=%.2f%% P=%.2fhPa seq=%u\n",
-               (double)s.temp_c, (double)s.humidity_pct, (double)s.pressure_hpa,
-               (unsigned)s_env_seq);
+        if (s.pressure_valid) {
+            printf("[bringup] env(%s) T=%.2fC H=%.2f%% P=%.2fhPa seq=%u\n",
+                   s_env->name,
+                   (double)s.temp_c, (double)s.humidity_pct,
+                   (double)s.pressure_hpa, (unsigned)s_env_seq);
+        } else {
+            printf("[bringup] env(%s) T=%.2fC H=%.2f%% P=- seq=%u\n",
+                   s_env->name,
+                   (double)s.temp_c, (double)s.humidity_pct,
+                   (unsigned)s_env_seq);
+        }
     }
 #if OLED_ON
     /* Update OLED shadow regardless of mqtt success — the display is local
@@ -259,6 +296,7 @@ static void publish_env_sample(void)
     s_disp_hum  = s.humidity_pct;
     s_disp_pres = s.pressure_hpa;
     s_disp_env_have = (q == 0);
+    s_env_has_pres  = s.pressure_valid;
 #endif
 }
 #endif /* SENSOR_ENV_ON */
@@ -332,6 +370,58 @@ static void publish_air_sample(void)
 #endif
 }
 #endif /* SENSOR_AIR_ON */
+
+#if SENSOR_LIGHT_ON
+/* light JSON encoder per CLAUDE.md §9.2.2:
+ *   {"ts_us":...,"wall_ms":...,"seq":...,"q":...,"v":{"lux":...}}
+ * BH1750 reports calibrated lux directly; 1-decimal precision matches the
+ * sensor's L-resolution step. */
+static int light_sample_encode(char *buf, size_t cap,
+                               uint64_t ts_us, int64_t wall_ms,
+                               uint32_t seq, uint8_t q, float lux)
+{
+    int n = snprintf(buf, cap,
+        "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%u,\"q\":%u,"
+        "\"v\":{\"lux\":%.1f}}",
+        (unsigned long long)ts_us, (long long)wall_ms,
+        (unsigned)seq, (unsigned)q, (double)lux);
+    return (n > 0 && (size_t)n < cap) ? n : -1;
+}
+
+static void publish_light_sample(void)
+{
+    if (!s_bh_ok) return;
+
+    Bh1750Sample s;
+    uint8_t q = 0;
+    err_t e = bh1750_read_sample(&s_bh, &s);
+    if (e != ERR_OK) {
+        printf("[bringup] BH1750 read failed rc=%d\n", (int)e);
+        q = 3;
+        s.lux = 0.0f;
+    }
+
+    char payload[200];
+    int pn = light_sample_encode(payload, sizeof(payload),
+                                 time_us_64(), -1,
+                                 ++s_light_seq, q, s.lux);
+    if (pn < 0) {
+        printf("[bringup] light encode overflow\n");
+        return;
+    }
+
+    cyw43_arch_lwip_begin();
+    err_t pe = mqtt_publish(g_mqtt, s_topic_light, payload, (u16_t)pn,
+                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+    cyw43_arch_lwip_end();
+    if (pe != ERR_OK) {
+        printf("[bringup] light mqtt_publish immediate rc=%d\n", (int)pe);
+    } else if (q == 0) {
+        printf("[bringup] light %.1f lux seq=%u\n",
+               (double)s.lux, (unsigned)s_light_seq);
+    }
+}
+#endif /* SENSOR_LIGHT_ON */
 
 #if SENSOR_RADAR_ON
 /* radar JSON encoder per CLAUDE.md §9.2.2:
@@ -462,6 +552,7 @@ static void mqtt_setup_and_connect(void)
     snprintf(s_topic_env,    sizeof(s_topic_env),    "rmms/%s/env",    g_id.uuid);
     snprintf(s_topic_air,    sizeof(s_topic_air),    "rmms/%s/air",    g_id.uuid);
     snprintf(s_topic_radar,  sizeof(s_topic_radar),  "rmms/%s/radar",  g_id.uuid);
+    snprintf(s_topic_light,  sizeof(s_topic_light),  "rmms/%s/light",  g_id.uuid);
 
     memset(&s_ci, 0, sizeof(s_ci));
     s_ci.client_id  = g_id.uuid;
@@ -564,7 +655,12 @@ static void render_page_env(uint32_t pub_count)
         sh1122_draw_text(&s_oled, 0, 18, 2, line);
         snprintf(line, sizeof(line), "H %5.1f %%", (double)s_disp_hum);
         sh1122_draw_text(&s_oled, 0, 36, 2, line);
-        snprintf(line, sizeof(line), "P %6.1f HPA", (double)s_disp_pres);
+        if (s_env_has_pres) {
+            snprintf(line, sizeof(line), "P %6.1f HPA", (double)s_disp_pres);
+        } else {
+            /* AHT21 path: no pressure sensor on this footprint. */
+            snprintf(line, sizeof(line), "P --");
+        }
         sh1122_draw_text(&s_oled, 124, 18, 2, line);
         snprintf(line, sizeof(line), "PUBLISHED %lu", (unsigned long)pub_count);
         sh1122_draw_text(&s_oled, 124, 36, 1, line);
@@ -701,9 +797,17 @@ static void sensors_task(void *arg)
     i2c_scan();
 
 #if SENSOR_ENV_ON
-    err_t e = bme280_init(&s_bme, BOARD_I2C_INST, BOARD_BME280_ADDR);
-    s_bme_ok = (e == ERR_OK);
-    printf("[bringup] BME280 init %s (rc=%d)\n", s_bme_ok ? "OK" : "FAILED", (int)e);
+    /* Pick BME280 or AHT21 from /cfg/sensors.json (defaults to BME280). The
+     * driver names itself, so the log line works for either. */
+    s_env = env_select_from_config();
+    uint8_t env_addr = (s_env == env_aht21_driver())
+                           ? BOARD_AHT21_ADDR : BOARD_BME280_ADDR;
+    err_t e = s_env ? s_env->init(s_env->ctx, BOARD_I2C_INST, env_addr)
+                    : ERR_FAIL;
+    s_env_ok = (e == ERR_OK);
+    printf("[bringup] env(%s) init %s (rc=%d)\n",
+           s_env ? s_env->name : "?",
+           s_env_ok ? "OK" : "FAILED", (int)e);
 #endif
 #if SENSOR_AIR_ON
     err_t ea = ens160_init(&s_ens, BOARD_I2C_INST, BOARD_ENS160_ADDR);
@@ -714,6 +818,11 @@ static void sensors_task(void *arg)
     err_t eo = sh1122_init(&s_oled, BOARD_I2C_INST, BOARD_OLED_ADDR);
     s_oled_ok = (eo == ERR_OK);
     printf("[bringup] SH1122 init %s (rc=%d)\n", s_oled_ok ? "OK" : "FAILED", (int)eo);
+#endif
+#if SENSOR_LIGHT_ON
+    err_t eb = bh1750_init(&s_bh, BOARD_I2C_INST, BOARD_BH1750_ADDR);
+    s_bh_ok = (eb == ERR_OK);
+    printf("[bringup] BH1750 init %s (rc=%d)\n", s_bh_ok ? "OK" : "FAILED", (int)eb);
 #endif
 #if SENSOR_RADAR_ON
     /* For now the bring-up only supports the BHA2; C1001 selection lives in
@@ -780,6 +889,11 @@ static void sensors_task(void *arg)
              * tile should track. read_sample inside publish_radar_sample
              * consumes up to 800 ms of UART, dovetailing with the 1 Hz tick. */
             publish_radar_sample();
+#endif
+#if SENSOR_LIGHT_ON
+            /* Light at 0.2 Hz — ambient illumination barely changes within
+             * a second and the mirror tile doesn't need fast refresh. */
+            if ((tick % 5) == 0) publish_light_sample();
 #endif
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

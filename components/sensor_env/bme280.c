@@ -294,3 +294,35 @@ err_t bme280_read_sample(Bme280 *dev, Bme280Sample *out)
 
     return ERR_OK;
 }
+
+/* ── env_driver_t v-table adapter ──────────────────────────────────────────
+ * Wraps the Bme280 API in the shared env_driver_t interface so callers can
+ * select between BME280 and AHT21 at /cfg/sensors.json provisioning time
+ * without rebuilding firmware. */
+#include "env_driver.h"
+
+static Bme280 s_bme280_ctx;
+
+static err_t bme280_drv_init(void *ctx, i2c_inst_t *i2c, uint8_t addr) {
+    return bme280_init((Bme280 *)ctx, i2c, addr);
+}
+
+static err_t bme280_drv_read(void *ctx, EnvSample *out) {
+    Bme280Sample s;
+    err_t e = bme280_read_sample((Bme280 *)ctx, &s);
+    if (e != ERR_OK) return e;
+    out->temp_c         = s.temp_c;
+    out->humidity_pct   = s.humidity_pct;
+    out->pressure_hpa   = s.pressure_hpa;
+    out->pressure_valid = true;
+    return ERR_OK;
+}
+
+static env_driver_t s_bme280_driver = {
+    .init        = bme280_drv_init,
+    .read_sample = bme280_drv_read,
+    .name        = "BME280",
+    .ctx         = &s_bme280_ctx,
+};
+
+env_driver_t *env_bme280_driver(void) { return &s_bme280_driver; }

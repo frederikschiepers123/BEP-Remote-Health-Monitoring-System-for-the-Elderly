@@ -88,6 +88,18 @@ err_t cfg_load_sensors(CfgSensors *out) {
     if      (strcmp(kind, "bha2")  == 0) out->radar = CFG_RADAR_BHA2;
     else if (strcmp(kind, "c1001") == 0) out->radar = CFG_RADAR_C1001;
     else { LOG_E("sensors.json: unknown radar '%s'", kind); return ERR_INVALID_ARG; }
-    LOG_I("sensors: radar=%s", kind);
+
+    /* `env` is optional; absent means BME280 (back-compat with existing
+     * provisioned devices that pre-date the AHT21 footprint). */
+    char env[16];
+    out->env = CFG_ENV_DEFAULT;
+    if (json_get_string(buf, toks, n, "env", env, sizeof(env)) == ERR_OK) {
+        if      (strcmp(env, "bme280") == 0) out->env = CFG_ENV_BME280;
+        else if (strcmp(env, "aht21")  == 0) out->env = CFG_ENV_AHT21;
+        else { LOG_E("sensors.json: unknown env '%s'", env); return ERR_INVALID_ARG; }
+        LOG_I("sensors: radar=%s env=%s", kind, env);
+    } else {
+        LOG_I("sensors: radar=%s env=(default, BME280)", kind);
+    }
     return ERR_OK;
 }

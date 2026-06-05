@@ -191,11 +191,11 @@ The firmware does **not** own:
 
 | Block            | Part                   | Bus  | Notes                                          |
 | ---------------- | ---------------------- | ---- | ---------------------------------------------- |
-| Environment      | Bosch BME280           | I²C0 | Temp + humidity + pressure                     |
-| Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BME280 `0x76/0x77`). On combo breakouts paired with AHT21, the AHT21 is **not used** — BME280 supplies temp/hum for compensation if needed. |
-| mmWave radar (A) | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary frame protocol (`0x53 0x59` header) |
+| Environment      | **AHT21** (default) **OR** Bosch BME280 | I²C0 | One I²C footprint, two populate options. AHT21 = temp + humidity (no pressure → `pres_hpa` emitted as `null` per §9.2.3). BME280 = temp + humidity + pressure. Selection via `/cfg/sensors.json` `"env"` field (`"aht21"` \| `"bme280"`); default `"bme280"` for back-compat with pre-AHT21 provisioned devices. AHT21 fixed addr `0x38`; BME280 `0x76` (SDO low) or `0x77`. |
+| Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BME280 `0x76/0x77` or AHT21 `0x38`). Compensation: whichever env driver is active feeds its last temp/hum into the ENS160 TEMP_IN / RH_IN registers every read cycle. |
+| mmWave radar (A) | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary protocol — `[0x01][SEQ][LEN][TYPE][~XOR hdr cksum]` header, see §3.2 framing note. |
 | mmWave radar (B) | **DFRobot C1001** (24 GHz, presence + vitals) | UART | 5 V mains, DFRobot AT-style command set |
-| Light            | GL5516 LDR             | ADC  | Voltage divider, single-ended sample           |
+| Light            | **Rohm BH1750FVI** (digital) — *spec deviation from §3.2 original GL5516 LDR* | I²C0 | 16-bit raw / 1.2 → lux; continuous H-resolution mode, ~120 ms/sample. Addr `0x23` (default) or `0x5C` (ADDR high). Replaces the analog LDR-on-ADC plan: calibrated lux out, 5-decade dynamic range, no voltage-divider compensation. Topic `rmms/<uuid>/light` payload `{"lux": ...}` unchanged from §9.2.2. |
 | OLED             | 1.3″ 128×64 (**likely SH1106**) | I²C0 | Confirm controller before driver work |
 | Buttons          | 2× momentary           | GPIO | Internal pull-up, hardware debounce optional   |
 | LEDs             | Status indicators      | GPIO | Plus CYW43 onboard LED for net-state           |

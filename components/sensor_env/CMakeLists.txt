@@ -1,6 +1,8 @@
 add_library(sensor_env STATIC
     sensor_env.c
     bme280.c
+    aht21.c
+    env_select.c
 )
 
 target_include_directories(sensor_env PUBLIC
@@ -12,6 +14,7 @@ target_link_libraries(sensor_env PUBLIC
     board
     log
     storage
+    cfg
     pico_stdlib
     hardware_i2c
     FreeRTOS-Kernel

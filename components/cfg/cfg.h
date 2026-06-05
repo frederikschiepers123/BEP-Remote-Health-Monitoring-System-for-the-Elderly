@@ -40,8 +40,18 @@ typedef enum {
     CFG_RADAR_C1001,    /* DFRobot C1001  — 24 GHz */
 } CfgRadarKind;
 
+/* Environmental-sensor selection. The PCB exposes a single I²C footprint
+ * that can be populated with either a BME280 (temp + humidity + pressure)
+ * or an AHT21 (temp + humidity only). See CLAUDE.md §3.2. */
+typedef enum {
+    CFG_ENV_DEFAULT = 0,  /* sensors.json had no "env" field; treat as BME280 */
+    CFG_ENV_BME280,
+    CFG_ENV_AHT21,
+} CfgEnvKind;
+
 typedef struct {
     CfgRadarKind radar;
+    CfgEnvKind   env;
 } CfgSensors;
 
 err_t cfg_load_wifi   (CfgWifi    *out);

@@ -19,8 +19,10 @@
 #define BOARD_I2C_FREQ_HZ       400000U
 
 #define BOARD_BME280_ADDR       0x76U   /* SDO low; 0x77 if SDO high */
+#define BOARD_AHT21_ADDR        0x38U   /* AHT21 has a fixed I²C address */
 #define BOARD_ENS160_ADDR       0x53U   /* default; 0x52 if ADDR pin pulled low */
 #define BOARD_OLED_ADDR         0x3CU   /* SA0 low; 0x3D if SA0 high */
+#define BOARD_BH1750_ADDR       0x23U   /* default; 0x5C if ADDR pin pulled high */
 
 /* ── UART1 — mmWave radar (shared UART for MR60BHA2 OR C1001; selection
  *           via /cfg/sensors.json per §3.2 / §7.4) ─────────────────────── */
