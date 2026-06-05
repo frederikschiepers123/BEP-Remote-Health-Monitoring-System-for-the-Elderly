@@ -11,97 +11,87 @@ Total demo time: **~12 minutes**, plus questions.
 
 ---
 
-## 0. Setup (do ~15 min before the supervisor walks in)
+## 0. Setup (~5 min once the one-time pieces are in place)
 
-The session uses your **phone's mobile hotspot** as the private Wi-Fi
-network (proven this session at `172.20.10.x`). Both broker cert SAN and
-the firmware's compiled-in `BROKER_IP` must match the tablet's hotspot
-IP, which the hotspot reassigns each connect. Plan to spend ~15 min on
-setup before the supervisor arrives.
+Network: **phone's mobile hotspot** as the private Wi-Fi (proven at
+`172.20.10.x`). Both broker cert SAN and the firmware's compiled-in
+`BROKER_IP` must match the tablet's hotspot IP, which the hotspot
+reassigns each reconnect.
 
-You need:
+You need: phone hotspot on, laptop + tablet + Pico 2 W on it, WSL2 terminal.
 
-- Phone with hotspot on.
-- Laptop joined to the phone hotspot (Wi-Fi).
-- Tablet joined to the phone hotspot.
-- Pico 2 W connected to the laptop over USB.
-- WSL2 terminal open in this repo.
+### One-time prep (do once per laptop, never again)
 
-### Step 0a — bring up the hotspot and find the IPs
+```bash
+# Passwordless SSH to the tablet (asks Termux password once):
+./scripts/setup_tablet_ssh.sh <tablet-ip>
 
-Phone: turn hotspot on. Connect laptop and tablet to it.
+# Windows-side port forward so the tablet can reach MM² on the laptop
+# (run from PowerShell as Administrator):
+netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8080 \
+    connectaddress=$(wsl -d Ubuntu -e bash -c 'ip -4 addr show eth0 | grep inet | awk "{print \$2}" | cut -d/ -f1') \
+    connectport=8080
+netsh advfirewall firewall add rule name="MM2 8080" dir=in action=allow \
+    protocol=TCP localport=8080
+```
 
-On the tablet (Termux):
+### Step 0a — get IPs
 
+Tablet (Termux):
 ```bash
 pgrep sshd || sshd
 ifconfig 2>/dev/null | grep 'inet ' | grep -v 127.0.0.1
 ```
 
-Note the tablet's IP — `172.20.10.X` typically. Call this `$TIP`
-mentally; the rest of the doc uses `<TIP>` as the placeholder.
-
-From the laptop (WSL2):
-
+Note `<TIP>` (tablet's hotspot IP, `172.20.10.X`). Verify from the laptop:
 ```bash
 ping -c 2 <TIP>
 ```
 
-Must succeed before going further. If it doesn't, see Plan B.
-
-### Step 0b — re-issue broker bundle for today's IP and push to tablet
-
-On the laptop:
+### Step 0b — bring up the broker
 
 ```bash
-cd ~/projects/BEP-Remote-Health-Monitoring-System-for-the-Elderly
-BROKER_IP=<TIP> ./scripts/provision_ca.sh
-scp -P 8022 out/broker/* u0_a76@<TIP>:/data/data/com.termux/files/home/rmms/
+./scripts/refresh_broker.sh <TIP>
 ```
 
-(Termux password prompt: enter your Termux password.)
+That single command re-issues the broker cert for today's `<TIP>`, pushes
+it, restarts Mosquitto, and verifies port 8883 answers — takes ~8 seconds.
+Output ends with `OK — broker reachable on <TIP>:8883`.
 
-On the tablet (Termux):
+### Step 0c — bring up MagicMirror² on the laptop
 
 ```bash
-mkdir -p ~/rmms/certs
-mv -f ~/rmms/ca.crt ~/rmms/broker.crt ~/rmms/broker.key ~/rmms/certs/
-chmod 600 ~/rmms/certs/broker.key
-pkill mosquitto 2>/dev/null
-mosquitto -c ~/rmms/mosquitto.conf -v
+cd ~/projects/BEP-Remote-Health-Monitoring-System-for-the-Elderly/MagicMirror
+nohup npm run server > /tmp/mm2.log 2>&1 &
+disown
+sleep 6 && tail -5 /tmp/mm2.log
 ```
 
-Leave this Termux window **visible to the supervisor** — they'll see the
-broker logs in real time.
+You should see `Ready to go!` and (once the browser loads) the bridge
+prints `MQTT connected — subscribing to: rmms/+/+` then `Subscribed.`
 
-### Step 0c — rebuild and stage the firmware for today's IP
+Edit `MagicMirror/config/config.js` to point the bridge at today's
+`<TIP>` if it has changed since last session (search-replace the
+`mqtts://...` URL).
 
-On the laptop:
+### Step 0d — rebuild + flash the firmware
 
 ```bash
 DEVDIR=$(ls -dt out/device-* | head -1)
 echo "device bundle: $DEVDIR"
 rm -rf build
 CERTS_DIR="$DEVDIR" \
-WIFI_SSID="<your-hotspot-ssid>" WIFI_PSK="<your-hotspot-password>" \
+WIFI_SSID="<hotspot-ssid>" WIFI_PSK="<hotspot-password>" \
 BROKER_IP="<TIP>" \
     cmake -S . -B build -DPICO_BOARD=pico2_w -DBUILD_BRINGUP=ON
-cmake --build build --target bringup_mqtt -j$(nproc)
-cp build/test/bringup/bringup_mqtt.uf2 /mnt/c/Users/frede/
+cmake --build build --target bringup_sensors -j$(nproc)
+cp build/test/bringup/bringup_sensors.uf2 /mnt/c/Users/frede/
 ```
 
-### Step 0d — sanity check + flash
+Drag `C:\Users\frede\bringup_sensors.uf2` onto the Pico's BOOTSEL drive,
+replug. Open PuTTY on COM3.
 
-```bash
-nc -zv <TIP> 8883
-```
-
-Expect `succeeded!`. If it fails, recheck steps 0a–0b.
-
-Drag `C:\Users\frede\bringup_mqtt.uf2` onto the Pico's BOOTSEL drive, then
-**fully unplug-replug** the Pico to clear USB state. Open PuTTY on COM3.
-
-Within 30 s you should see the Pico publishing `hello N` every 10 s, and
+Within 30 s you should see the Pico publishing `env T=…` every 1 s, and
 the tablet's Mosquitto window logging `Received PUBLISH from <uuid>` lines.
 
 ---
@@ -206,6 +196,25 @@ mirror is running on the tablet, the entire vital-display flow is:
 Pico → tablet broker → MM-CustomMQTTBridge → MMM-SensorUI tile → behind
 the two-way acrylic. We've proven every leg of that path independently
 this session."
+
+### 1.4.5 — The actual mirror running with live data (~2 min)
+
+This is the headline demo. Three things visible at the same time:
+
+- **Tablet's web browser** at `http://<laptop-ip>:8080` showing
+  MagicMirror² with tiles for heart rate, breath rate, temperature,
+  humidity, air quality. Tiles light up with live values from the Pico
+  within seconds.
+- **Pico's OLED** cycling through four pages (Network/Broker → Env →
+  Air → Build) — same data the mirror displays, on the device itself.
+- **Tablet's Mosquitto window** logging incoming `PUBLISH from <uuid>`
+  for `/env` and `/air` every 1–5 seconds.
+
+**Talking point:** "Three independent views of the same data. The mirror
+on the tablet is the user-facing layer; the OLED is on-device confirmation;
+the Mosquitto log is what the Radxa would see for FHIR translation. Each
+view confirms the path independently. The whole chain is over mTLS —
+break any cert and the whole thing stops working immediately."
 
 ### 1.5 — Walk through the bring-up ladder (~2 min)
 
