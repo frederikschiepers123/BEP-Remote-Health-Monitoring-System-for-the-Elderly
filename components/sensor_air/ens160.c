@@ -90,11 +90,15 @@ err_t ens160_init(Ens160 *dev, i2c_inst_t *i2c, uint8_t addr)
     dev->i2c  = i2c;
     dev->addr = addr;
 
-    /* Soft reset. */
+    /* Soft reset. Datasheet §6.1: chip needs ~250 ms to be ready for any
+     * further command after a reset. The previous 10 ms was too short; the
+     * mode-change write that follows could land before the chip was awake,
+     * leaving it in a half-initialised state where STATUS reads back 0x00
+     * forever and all measurement registers stay at their power-on zeros. */
     err_t err = write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_RESET);
     if (err != ERR_OK) { return err; }
 #ifndef HOST_TEST
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(250));
 #endif
 
     /* Verify part ID. */
@@ -113,10 +117,37 @@ err_t ens160_init(Ens160 *dev, i2c_inst_t *i2c, uint8_t addr)
     err = write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
     if (err != ERR_OK) { return err; }
 #ifndef HOST_TEST
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(50));
 #endif
 
-    LOG_I("ENS160 init OK at 0x%02X (warmup ~3 min)", addr);
+    /* Verify the chip actually entered STANDARD mode. If the mode-write was
+     * dropped (silent ack but ignored — observed on some breakouts when the
+     * post-reset wait was too short or the chip was in a weird POR state),
+     * STATUS will read 0x00 forever and every measurement comes back zero.
+     * Retry once with a longer wait, then bail out loudly. */
+    uint8_t opmode_back = 0xFF;
+    err = read_regs(dev, ENS160_REG_OPMODE, &opmode_back, 1);
+    if (err == ERR_OK && opmode_back != ENS160_OPMODE_STANDARD) {
+        LOG_W("OPMODE readback=0x%02X, expected 0x%02X; retrying",
+              opmode_back, ENS160_OPMODE_STANDARD);
+#ifndef HOST_TEST
+        vTaskDelay(pdMS_TO_TICKS(250));
+#endif
+        err = write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
+        if (err != ERR_OK) { return err; }
+#ifndef HOST_TEST
+        vTaskDelay(pdMS_TO_TICKS(50));
+#endif
+        err = read_regs(dev, ENS160_REG_OPMODE, &opmode_back, 1);
+        if (err == ERR_OK && opmode_back != ENS160_OPMODE_STANDARD) {
+            LOG_E("OPMODE still 0x%02X after retry — chip not measuring",
+                  opmode_back);
+            return ERR_IO;
+        }
+    }
+
+    LOG_I("ENS160 init OK at 0x%02X (OPMODE=0x%02X, warmup ~3 min)",
+          addr, opmode_back);
     return ERR_OK;
 }
 

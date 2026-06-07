@@ -326,3 +326,33 @@ target_link_libraries(bringup_sensors PRIVATE
 pico_enable_stdio_usb(bringup_sensors 1)
 pico_enable_stdio_uart(bringup_sensors 0)
 pico_add_extra_outputs(bringup_sensors)
+
+# Diagnostic clone — same as bringup_sensors but I²C clocked at 100 kHz.
+# Use when the bus has marginal pull-ups (e.g. a sensor breakout that carried
+# its own 4.7 kΩ resistors got removed). Same .uf2 layout, different filename.
+add_executable(bringup_sensors_slow
+    sensors_publish.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
+    ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
+)
+target_include_directories(bringup_sensors_slow BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lwip
+)
+target_include_directories(bringup_sensors_slow PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_air
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar
+    ${CMAKE_SOURCE_DIR}/components/ui_oled
+)
+target_compile_definitions(bringup_sensors_slow PRIVATE BOARD_I2C_FREQ_HZ=100000U)
+target_link_libraries(bringup_sensors_slow PRIVATE
+    board log storage identity cfg sensor_env sensor_light
+    pico_stdlib pico_stdio_usb
+    hardware_i2c hardware_uart hardware_gpio hardware_adc
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt pico_lwip_mbedtls pico_mbedtls
+    FreeRTOS-Kernel FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_sensors_slow 1)
+pico_enable_stdio_uart(bringup_sensors_slow 0)
+pico_add_extra_outputs(bringup_sensors_slow)

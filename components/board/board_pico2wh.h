@@ -16,7 +16,13 @@
 #define BOARD_I2C_INST          i2c0
 #define BOARD_I2C_SDA_PIN       8     /* GP8, pin 11 */
 #define BOARD_I2C_SCL_PIN       9     /* GP9, pin 12 */
+/* I²C bus speed. Default 400 kHz fast-mode; can be overridden at build time
+ * with -DBOARD_I2C_FREQ_HZ=100000U for a diagnostic slow-mode build that
+ * tolerates marginal pull-ups (e.g. after removing a sensor breakout that
+ * carried onboard pull-up resistors). */
+#ifndef BOARD_I2C_FREQ_HZ
 #define BOARD_I2C_FREQ_HZ       400000U
+#endif
 
 #define BOARD_BME280_ADDR       0x76U   /* SDO low; 0x77 if SDO high */
 #define BOARD_AHT21_ADDR        0x38U   /* AHT21 has a fixed I²C address */

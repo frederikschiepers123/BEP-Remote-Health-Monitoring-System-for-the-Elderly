@@ -17,6 +17,7 @@
  */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
@@ -90,6 +91,22 @@ mbedtls_ms_time_t mbedtls_ms_time(void)
 /* ── MQTT state ─────────────────────────────────────────────────────────── */
 static mqtt_client_t *g_mqtt;
 static volatile bool g_mqtt_connected = false;
+
+/* Single mutex serialising every I²C0 transaction. The pico-sdk's
+ * i2c_*_blocking calls are not task-aware, so if render_task (OLED) and
+ * sensors_task (AHT21/ENS160/BH1750) hit the bus concurrently the
+ * transactions interleave at the byte level — symptoms include AHT21
+ * humidity stuck on a previous value, BH1750 reading 0, ENS160 reading
+ * all zeros, and the OLED reporting "I2C data row failed: -1". Every call
+ * site that touches I²C0 must take this mutex. */
+static SemaphoreHandle_t g_i2c_mutex = NULL;
+#define I2C_LOCK()    xSemaphoreTake(g_i2c_mutex, portMAX_DELAY)
+#define I2C_UNLOCK()  xSemaphoreGive(g_i2c_mutex)
+/* Set true if cyw43 associated to the AP. If false the bring-up still
+ * exercises every sensor and prints to PuTTY; mqtt_publish calls are
+ * simply skipped. Useful for sensor verification without a broker, and
+ * for surviving transient WiFi failures during longer demos. */
+static bool g_wifi_ok = false;
 /* Reconnect / LWT plumbing — the mqtt_connect_client_info_t and altcp_tls
  * config must outlive the publish loop because mqtt_client_connect doesn't
  * copy the struct, and we want to reconnect on broker drop without re-doing
@@ -308,7 +325,9 @@ static void publish_env_sample(void)
 
     EnvSample s;
     uint8_t q = 0;
+    I2C_LOCK();
     err_t e = s_env->read_sample(s_env->ctx, &s);
+    I2C_UNLOCK();
     if (e != ERR_OK) {
         printf("[bringup] env(%s) read failed rc=%d\n", s_env->name, (int)e);
         q = 3;                     /* invalid */
@@ -320,7 +339,9 @@ static void publish_env_sample(void)
      * active (CLAUDE.md §3.2). 1 Hz is plenty — the AQI math doesn't change
      * meaningfully within that window. */
     if (q == 0 && s_ens_ok) {
+        I2C_LOCK();
         (void)ens160_set_compensation(&s_ens, s.temp_c, s.humidity_pct);
+        I2C_UNLOCK();
     }
 #endif
 
@@ -335,13 +356,17 @@ static void publish_env_sample(void)
         return;
     }
 
-    cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, s_topic_env, payload, (u16_t)pn,
-                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
-    cyw43_arch_lwip_end();
+    err_t pe = ERR_OK;
+    if (g_mqtt && g_mqtt_connected) {
+        cyw43_arch_lwip_begin();
+        pe = mqtt_publish(g_mqtt, s_topic_env, payload, (u16_t)pn,
+                                /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+        cyw43_arch_lwip_end();
+    }
     if (pe != ERR_OK) {
         printf("[bringup] env mqtt_publish immediate rc=%d\n", (int)pe);
-    } else if (q == 0) {
+    }
+    if (q == 0) {
         if (s.pressure_valid) {
             printf("[bringup] env(%s) T=%.2fC H=%.2f%% P=%.2fhPa seq=%u\n",
                    s_env->name,
@@ -389,7 +414,9 @@ static void publish_air_sample(void)
 
     Ens160Sample s;
     uint8_t q = 0;
+    I2C_LOCK();
     err_t e = ens160_read_sample(&s_ens, &s);
+    I2C_UNLOCK();
     if (e != ERR_OK) {
         printf("[bringup] ENS160 read failed rc=%d\n", (int)e);
         q = 3;
@@ -416,16 +443,18 @@ static void publish_air_sample(void)
         return;
     }
 
-    cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, s_topic_air, payload, (u16_t)pn,
-                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
-    cyw43_arch_lwip_end();
+    err_t pe = ERR_OK;
+    if (g_mqtt && g_mqtt_connected) {
+        cyw43_arch_lwip_begin();
+        pe = mqtt_publish(g_mqtt, s_topic_air, payload, (u16_t)pn,
+                                /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+        cyw43_arch_lwip_end();
+    }
     if (pe != ERR_OK) {
         printf("[bringup] air mqtt_publish immediate rc=%d\n", (int)pe);
-    } else {
-        printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u seq=%u\n",
-               s.aqi, s.co2_ppm, s.tvoc_ppb, q, (unsigned)s_air_seq);
     }
+    printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u seq=%u\n",
+           s.aqi, s.co2_ppm, s.tvoc_ppb, q, (unsigned)s_air_seq);
 #if OLED_ON
     s_disp_co2  = s.co2_ppm;
     s_disp_tvoc = s.tvoc_ppb;
@@ -459,7 +488,9 @@ static void publish_light_sample(void)
 
     LightSample s;
     uint8_t q = 0;
+    I2C_LOCK();
     err_t e = s_light->read_sample(s_light->ctx, &s);
+    I2C_UNLOCK();
     if (e != ERR_OK) {
         printf("[bringup] light(%s) read failed rc=%d\n", s_light->name, (int)e);
         q = 3;
@@ -475,13 +506,17 @@ static void publish_light_sample(void)
         return;
     }
 
-    cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, s_topic_light, payload, (u16_t)pn,
-                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
-    cyw43_arch_lwip_end();
+    err_t pe = ERR_OK;
+    if (g_mqtt && g_mqtt_connected) {
+        cyw43_arch_lwip_begin();
+        pe = mqtt_publish(g_mqtt, s_topic_light, payload, (u16_t)pn,
+                                /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+        cyw43_arch_lwip_end();
+    }
     if (pe != ERR_OK) {
         printf("[bringup] light mqtt_publish immediate rc=%d\n", (int)pe);
-    } else if (q == 0) {
+    }
+    if (q == 0) {
         printf("[bringup] light(%s) %.1f lux seq=%u\n",
                s_light->name, (double)s.lux, (unsigned)s_light_seq);
     }
@@ -545,13 +580,17 @@ static void publish_radar_sample(void)
         return;
     }
 
-    cyw43_arch_lwip_begin();
-    err_t pe = mqtt_publish(g_mqtt, s_topic_radar, payload, (u16_t)pn,
-                            /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
-    cyw43_arch_lwip_end();
+    err_t pe = ERR_OK;
+    if (g_mqtt && g_mqtt_connected) {
+        cyw43_arch_lwip_begin();
+        pe = mqtt_publish(g_mqtt, s_topic_radar, payload, (u16_t)pn,
+                                /*qos=*/1, /*retain=*/0, mqtt_pub_cb, NULL);
+        cyw43_arch_lwip_end();
+    }
     if (pe != ERR_OK) {
         printf("[bringup] radar mqtt_publish immediate rc=%d\n", (int)pe);
-    } else if (q == 0) {
+    }
+    if (q == 0) {
         printf("[bringup] radar pres=%d dist=%lumm BR=%.1f HR=%.1f q=%u seq=%u\n",
                (int)s.presence, (unsigned long)s.distance_mm,
                (double)s.breath_rpm, (double)s.heart_bpm, q,
@@ -859,7 +898,11 @@ static void render_task(void *arg)
         case 3: render_page_build(); break;
         default: render_page_net(uptime_s); break;
         }
+        /* sh1122_clear/draw_text operate on the in-RAM framebuffer (no I²C).
+         * Only the flush touches the bus, so that's the only thing we lock. */
+        I2C_LOCK();
         (void)sh1122_flush(&s_oled);
+        I2C_UNLOCK();
 
         vTaskDelay(pdMS_TO_TICKS(300));   /* ~3 Hz refresh */
     }
@@ -921,6 +964,10 @@ static void sensors_task(void *arg)
 
     /* ── Discrete GPIO + I²C + sensor probes (independent of network) ── */
     discrete_gpio_init();
+    g_i2c_mutex = xSemaphoreCreateMutex();
+    if (!g_i2c_mutex) {
+        for (;;) { printf("[bringup] mutex alloc FAILED\n"); vTaskDelay(pdMS_TO_TICKS(3000)); }
+    }
     i2c_bus_init();
     i2c_scan();
 
@@ -976,22 +1023,35 @@ static void sensors_task(void *arg)
     int rc = cyw43_arch_wifi_connect_timeout_ms(g_wifi.ssid, g_wifi.psk,
                                                 CYW43_AUTH_WPA2_AES_PSK, 30000);
     if (rc != 0) {
-        for (;;) { printf("[bringup] wifi connect FAILED rc=%d\n", rc); vTaskDelay(pdMS_TO_TICKS(3000)); }
+        /* Non-fatal: keep going so sensor reads + OLED + serial console all
+         * still work. mqtt_setup_and_connect is skipped below; the publish
+         * helpers check g_wifi_ok and just printf the sample.
+         * rc=-7 BADAUTH wrong password; rc=-8 CONNECT_FAILED AP rejected
+         * (often 5 GHz-only / WPA3-only); rc=-2 NONET SSID not visible. */
+        printf("[bringup] wifi connect FAILED rc=%d — continuing in sensor-only mode\n", rc);
+        g_wifi_ok = false;
+    } else {
+        g_wifi_ok = true;
     }
-    const ip4_addr_t *ip = netif_ip4_addr(netif_default);
+    const ip4_addr_t *ip = g_wifi_ok ? netif_ip4_addr(netif_default) : NULL;
     printf("[bringup] CONNECTED — IP = %s\n", ip ? ip4addr_ntoa(ip) : "(none)");
-    /* WiFi LED indicates association — lit once we have an IP. If we later
-     * lose the link (handled by the MQTT reconnect path), we leave the LED
-     * on for now; tracking link drops would need polling cyw43_tcpip_link_status
-     * which is fine to add when transport_selector lands. */
+    /* WiFi LED indicates association — lit once we have an IP. */
     gpio_put(BOARD_LED_WIFI_PIN, ip ? 1 : 0);
 #if OLED_ON
     snprintf(s_wifi_ip, sizeof(s_wifi_ip), "%s", ip ? ip4addr_ntoa(ip) : "----");
 #endif
 
-    mqtt_setup_and_connect();
+    if (g_wifi_ok) {
+        mqtt_setup_and_connect();
+    } else {
+        printf("[bringup] skipping MQTT setup (no WiFi) — sensor reads still flow to PuTTY\n");
+    }
 
-    /* ── 1 Hz publish loop with auto-reconnect ───────────────────────── */
+    /* ── 1 Hz publish loop ──────────────────────────────────────────────
+     * Sensor reads + serial prints happen every tick regardless of network
+     * state — that's the path that confirms hardware is alive. The MQTT
+     * publish inside each publish_*_sample is guarded by g_mqtt_connected,
+     * so a down link just means no broker traffic; nothing else changes. */
     TickType_t next_reconnect_attempt = 0;
     for (uint32_t tick = 0; ; tick++) {
         /* Some failure modes (broker hard-drop, network blip) take down the
@@ -1003,7 +1063,7 @@ static void sensors_task(void *arg)
             s_reconnect_pending = true;
         }
 
-        if (!g_mqtt_connected) {
+        if (g_wifi_ok && !g_mqtt_connected) {
             TickType_t now = xTaskGetTickCount();
             if (s_reconnect_pending && now >= next_reconnect_attempt) {
                 mqtt_try_reconnect();
@@ -1011,28 +1071,24 @@ static void sensors_task(void *arg)
             } else if ((tick % 5) == 0) {
                 printf("[bringup] waiting for MQTT CONNACK ...\n");
             }
-        } else {
+        }
+
+        /* Sensor reads run every tick regardless of MQTT — they printf the
+         * value and conditionally publish if g_mqtt is connected. */
 #if SENSOR_ENV_ON
-            publish_env_sample();
+        publish_env_sample();
 #endif
 #if SENSOR_AIR_ON
-            /* Publish /air every 5 s — ENS160 produces a fresh reading
-             * once a second, but the AQI / CO2 / TVOC change slowly and the
-             * mirror UI doesn't need 1 Hz updates. Reduces broker load. */
-            if ((tick % 5) == 0) publish_air_sample();
+        if ((tick % 5) == 0) publish_air_sample();
 #endif
 #if SENSOR_RADAR_ON
-            /* Radar at 1 Hz — heart/breath change visibly that fast and the
-             * tile should track. read_sample inside publish_radar_sample
-             * consumes up to 800 ms of UART, dovetailing with the 1 Hz tick. */
-            publish_radar_sample();
+        publish_radar_sample();
 #endif
 #if SENSOR_LIGHT_ON
-            /* Light at 0.2 Hz — ambient illumination barely changes within
-             * a second and the mirror tile doesn't need fast refresh. */
-            if ((tick % 5) == 0) publish_light_sample();
+        /* Light at 0.2 Hz — ambient illumination barely changes within
+         * a second and the mirror tile doesn't need fast refresh. */
+        if ((tick % 5) == 0) publish_light_sample();
 #endif
-        }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

@@ -11,6 +11,7 @@
 #include "task.h"
 #endif
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -91,22 +92,31 @@ err_t aht21_read_sample(Aht21 *dev, Aht21Sample *out) {
     err_t e = i2c_write(dev, trigger, sizeof(trigger));
     if (e != ERR_OK) return e;
 
-    /* Typical conversion time 75 ms per datasheet; pad to 80. */
-    vTaskDelay(pdMS_TO_TICKS(80));
+    /* Fixed 300 ms wait. The datasheet says typical 75 ms / max 100 ms but
+     * AHT20 silicon mounted on "AHT21" combo boards needs more. We tried
+     * polling the BUSY bit to wait the minimum needed, but a status read
+     * issued between the trigger and the burst read can leave the chip's
+     * data buffer half-written — observed as humidity stuck at one
+     * previous value (e.g. 89.05%) over many samples while temperature
+     * keeps updating. 300 ms is well past any AHTxx max conversion time
+     * and the publish loop only runs at 1 Hz, so the latency is invisible. */
+    vTaskDelay(pdMS_TO_TICKS(300));
 
-    uint8_t raw[7];
-    e = i2c_read(dev, raw, sizeof(raw));
+    /* Read status + 5 data bytes only. The datasheet specifies a 7-byte
+     * read with CRC at byte 6, but most ENS160+AHT21 combo breakouts in
+     * the wild actually mount an AHT20 — same protocol up to byte 5, then
+     * stops driving SDA so byte 6 reads back as the floating high pull-up
+     * (0xff) and CRC verify fails on every cycle. Skipping CRC trades a
+     * theoretical undetected single-bit flip for actually-working reads;
+     * the 5 data bytes encode well-formed 20-bit fields whose decoded
+     * temp + humidity are sanity-checked at sample time by the consumer. */
+    uint8_t raw[6];
+    e = i2c_read(dev, raw, 6);
     if (e != ERR_OK) return e;
 
     if (raw[0] & AHT21_STATUS_BUSY) {
-        LOG_W("still busy after 80 ms (status=0x%02x)", raw[0]);
+        LOG_W("BUSY came back after burst read (status=0x%02x)", raw[0]);
         return ERR_BUSY;
-    }
-    uint8_t got_crc = raw[6];
-    uint8_t exp_crc = crc8(raw, 6);
-    if (got_crc != exp_crc) {
-        LOG_W("CRC mismatch got=0x%02x exp=0x%02x", got_crc, exp_crc);
-        return ERR_IO;
     }
 
     /* hum_raw is 20 bits: bytes[1] [bytes[2]] [bytes[3] high nibble]
