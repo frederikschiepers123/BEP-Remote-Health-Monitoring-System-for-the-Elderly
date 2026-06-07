@@ -16,6 +16,7 @@
 #define BH1750_CMD_POWER_ON     0x01
 #define BH1750_CMD_RESET        0x07
 #define BH1750_CMD_CONT_H       0x10   /* continuous 1-lux mode, ~120 ms / sample */
+#define BH1750_CMD_ONESHOT_H    0x20   /* one-shot H-res, chip auto-powers down  */
 
 static err_t send_cmd(Bh1750 *dev, uint8_t cmd) {
     int n = i2c_write_blocking(dev->i2c, dev->addr, &cmd, 1, false);
@@ -27,26 +28,35 @@ err_t bh1750_init(Bh1750 *dev, i2c_inst_t *i2c, uint8_t addr) {
     dev->i2c  = i2c;
     dev->addr = addr;
 
+    /* Power-on + reset is all the init we need; each sample then uses
+     * one-shot mode (see bh1750_read_sample). One-shot is more robust on
+     * a shared I²C bus than continuous mode — the chip is in a known
+     * power-down state between reads instead of cycling internally. */
     err_t e = send_cmd(dev, BH1750_CMD_POWER_ON);
     if (e != ERR_OK) {
         LOG_E("power-on write failed (rc=%d) — wiring/addr?", (int)e);
         return ERR_NOT_FOUND;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
+    (void)send_cmd(dev, BH1750_CMD_RESET);
+    vTaskDelay(pdMS_TO_TICKS(10));
 
-    e = send_cmd(dev, BH1750_CMD_CONT_H);
-    if (e != ERR_OK) {
-        LOG_E("mode write failed (rc=%d)", (int)e);
-        return ERR_IO;
-    }
-    /* Wait one full measurement window before first read. */
-    vTaskDelay(pdMS_TO_TICKS(180));
-
-    LOG_I("init OK at 0x%02x (continuous H-resolution)", addr);
+    LOG_I("init OK at 0x%02x (one-shot H-resolution)", addr);
     return ERR_OK;
 }
 
 err_t bh1750_read_sample(Bh1750 *dev, Bh1750Sample *out) {
+    /* Re-issue power-on every cycle: cheap, and recovers from any state
+     * the chip might have ended up in (e.g. after a glitch from earlier
+     * bus contention left it in power-down). */
+    (void)send_cmd(dev, BH1750_CMD_POWER_ON);
+    err_t e = send_cmd(dev, BH1750_CMD_ONESHOT_H);
+    if (e != ERR_OK) return e;
+
+    /* H-resolution one-shot conversion takes ~120 ms typical, 180 ms max
+     * per datasheet. After the read the chip auto-powers-down. */
+    vTaskDelay(pdMS_TO_TICKS(180));
+
     uint8_t raw[2];
     int n = i2c_read_blocking(dev->i2c, dev->addr, raw, sizeof(raw), false);
     if (n != (int)sizeof(raw)) return ERR_IO;
