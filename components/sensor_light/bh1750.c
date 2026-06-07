@@ -55,3 +55,32 @@ err_t bh1750_read_sample(Bh1750 *dev, Bh1750Sample *out) {
     out->lux = (float)counts / 1.2f;
     return ERR_OK;
 }
+
+/* ── light_driver_t v-table adapter ──────────────────────────────────────── */
+#ifndef HOST_TEST
+#include "light_driver.h"
+#include "board_pico2wh.h"
+
+static Bh1750 s_bh1750_ctx;
+
+static err_t bh1750_drv_init(void *ctx) {
+    return bh1750_init((Bh1750 *)ctx, BOARD_I2C_INST, BOARD_BH1750_ADDR);
+}
+
+static err_t bh1750_drv_read(void *ctx, LightSample *out) {
+    Bh1750Sample s;
+    err_t e = bh1750_read_sample((Bh1750 *)ctx, &s);
+    if (e != ERR_OK) return e;
+    out->lux = s.lux;
+    return ERR_OK;
+}
+
+static light_driver_t s_bh1750_driver = {
+    .init        = bh1750_drv_init,
+    .read_sample = bh1750_drv_read,
+    .name        = "BH1750",
+    .ctx         = &s_bh1750_ctx,
+};
+
+light_driver_t *light_bh1750_driver(void) { return &s_bh1750_driver; }
+#endif /* HOST_TEST */

@@ -53,6 +53,18 @@
 #define BOARD_LED_POWER_PIN     14    /* GP14, pin 19 — "system on" indicator */
 #define BOARD_LED_WIFI_PIN      15    /* GP15, pin 20 — "wifi associated" indicator */
 
+/* ── ADC0 — GL5516 LDR (generic module variant only; advanced module leaves
+ *           this pin unpopulated, BH1750 over I²C handles light there) ──── */
+/* GP26 = ADC channel 0 on RP2350. Wired as:
+ *   3V3 ── R6 (LDR, GL5516) ── ADC_NODE ── R7 (1 kΩ to GND) ── GND
+ *                              │
+ *                              └─ GP26 / ADC0 / pin 31
+ * So the ADC sees:  V = VCC × R_fixed / (R_LDR + R_fixed). See ADR-0001. */
+#define BOARD_LDR_ADC_INPUT     0     /* hardware_adc input index (= ADC0)  */
+#define BOARD_LDR_ADC_GPIO      26    /* GP26, pin 31                       */
+#define BOARD_LDR_VCC_V         3.3f
+#define BOARD_LDR_FIXED_OHM     1000.0f  /* R7 in the divider                */
+
 /* ── Generic / reserved GPIO labels ──────────────────────────────────────── */
 /* The PCB exposes D0, D2, D8, D9, D10 as generic breakouts; not bound to a
  * sensor in v1. Listed here for traceability against the schematic. */

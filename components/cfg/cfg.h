@@ -49,9 +49,20 @@ typedef enum {
     CFG_ENV_AHT21,
 } CfgEnvKind;
 
+/* Light-sensor selection — two product variants on the same PCB.
+ * Advanced module: BH1750 over I²C0 (on the MR60BHA2 breakout).
+ * Generic  module: GL5516 LDR on ADC0/GPIO26 via a voltage divider.
+ * See ADR-0001. Default is BH1750 (what the advanced demo populates). */
+typedef enum {
+    CFG_LIGHT_DEFAULT = 0,  /* sensors.json had no "light" field; treat as BH1750 */
+    CFG_LIGHT_BH1750,
+    CFG_LIGHT_GL5516,
+} CfgLightKind;
+
 typedef struct {
     CfgRadarKind radar;
     CfgEnvKind   env;
+    CfgLightKind light;
 } CfgSensors;
 
 err_t cfg_load_wifi   (CfgWifi    *out);

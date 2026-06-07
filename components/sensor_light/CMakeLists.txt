@@ -1,5 +1,8 @@
 add_library(sensor_light STATIC
     sensor_light.c
+    bh1750.c
+    gl5516.c
+    light_select.c
 )
 
 target_include_directories(sensor_light PUBLIC
@@ -10,7 +13,10 @@ target_include_directories(sensor_light PUBLIC
 target_link_libraries(sensor_light PUBLIC
     board
     log
+    cfg
     pico_stdlib
     hardware_adc
+    hardware_gpio
+    hardware_i2c
     FreeRTOS-Kernel
 )

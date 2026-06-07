@@ -51,8 +51,8 @@ void light_task(void *arg)
 
     /* ADC init using board constants */
     adc_init();
-    adc_gpio_init(BOARD_LDR_ADC_PIN);
-    adc_select_input(BOARD_LDR_ADC_CHANNEL);
+    adc_gpio_init(BOARD_LDR_ADC_GPIO);
+    adc_select_input(BOARD_LDR_ADC_INPUT);
 
     uint32_t seq     = 0;
     uint32_t dropped = 0;

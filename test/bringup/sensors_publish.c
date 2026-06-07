@@ -36,7 +36,7 @@
 #include "board_pico2wh.h"
 #include "env_driver.h"
 #include "ens160.h"
-#include "bh1750.h"
+#include "light_driver.h"
 #include "sh1122.h"
 #include "radar_driver.h"
 #include "err.h"
@@ -256,9 +256,9 @@ static bool   s_ens_ok = false;
 static uint32_t s_air_seq = 0;
 #endif
 #if SENSOR_LIGHT_ON
-static Bh1750  s_bh;
-static bool    s_bh_ok = false;
-static uint32_t s_light_seq = 0;
+static light_driver_t *s_light = NULL;
+static bool            s_light_ok = false;
+static uint32_t        s_light_seq = 0;
 #endif
 #if SENSOR_RADAR_ON
 static radar_driver_t *s_radar = NULL;
@@ -455,13 +455,13 @@ static int light_sample_encode(char *buf, size_t cap,
 
 static void publish_light_sample(void)
 {
-    if (!s_bh_ok) return;
+    if (!s_light_ok) return;
 
-    Bh1750Sample s;
+    LightSample s;
     uint8_t q = 0;
-    err_t e = bh1750_read_sample(&s_bh, &s);
+    err_t e = s_light->read_sample(s_light->ctx, &s);
     if (e != ERR_OK) {
-        printf("[bringup] BH1750 read failed rc=%d\n", (int)e);
+        printf("[bringup] light(%s) read failed rc=%d\n", s_light->name, (int)e);
         q = 3;
         s.lux = 0.0f;
     }
@@ -482,8 +482,8 @@ static void publish_light_sample(void)
     if (pe != ERR_OK) {
         printf("[bringup] light mqtt_publish immediate rc=%d\n", (int)pe);
     } else if (q == 0) {
-        printf("[bringup] light %.1f lux seq=%u\n",
-               (double)s.lux, (unsigned)s_light_seq);
+        printf("[bringup] light(%s) %.1f lux seq=%u\n",
+               s_light->name, (double)s.lux, (unsigned)s_light_seq);
     }
 }
 #endif /* SENSOR_LIGHT_ON */
@@ -581,6 +581,29 @@ static void i2c_bus_init(void)
     gpio_pull_up(BOARD_I2C_SCL_PIN);
     printf("[bringup] I²C0 init on SDA=GP%d SCL=GP%d @ %u Hz\n",
            BOARD_I2C_SDA_PIN, BOARD_I2C_SCL_PIN, (unsigned)BOARD_I2C_FREQ_HZ);
+}
+
+/* Discrete GPIO init for the PCB's local UI: PWR LED (lit at boot), WiFi LED
+ * (driven by transport state — see below), and SW2 display-cycle button
+ * (external 1 kΩ pull-up, active-low). Power LED is always on once the
+ * firmware reaches this point. */
+static void discrete_gpio_init(void)
+{
+    gpio_init(BOARD_LED_POWER_PIN);
+    gpio_set_dir(BOARD_LED_POWER_PIN, GPIO_OUT);
+    gpio_put(BOARD_LED_POWER_PIN, 1);
+
+    gpio_init(BOARD_LED_WIFI_PIN);
+    gpio_set_dir(BOARD_LED_WIFI_PIN, GPIO_OUT);
+    gpio_put(BOARD_LED_WIFI_PIN, 0);
+
+    gpio_init(BOARD_BTN_DISPLAY_PIN);
+    gpio_set_dir(BOARD_BTN_DISPLAY_PIN, GPIO_IN);
+    /* External 1 kΩ pull-up is in place per the schematic; no internal
+     * pull-up needed. */
+    printf("[bringup] discrete GPIO init: PWR_LED=GP%d on, WIFI_LED=GP%d off, "
+           "SW2=GP%d (active-low)\n",
+           BOARD_LED_POWER_PIN, BOARD_LED_WIFI_PIN, BOARD_BTN_DISPLAY_PIN);
 }
 
 /* Quick I²C presence scan — useful diagnostic when a sensor init fails. */
@@ -786,6 +809,25 @@ static void render_page_build(void)
     oled_page_indicator(4);
 }
 
+/* SW2 display-cycle button: GPIO16, external 1 kΩ pull-up, active-low.
+ * Debounce by sampling at the ~3 Hz render cadence and requiring two
+ * consecutive low reads (~300 ms apart) before counting an edge — well
+ * past the 30 ms debounce window used in the reference Arduino code. */
+static uint8_t sw_disp_last = 1;     /* last raw read (HIGH at rest) */
+static uint8_t sw_disp_stable = 1;
+static bool sw_disp_pressed_edge(void)
+{
+    uint8_t now_raw = (uint8_t)gpio_get(BOARD_BTN_DISPLAY_PIN);
+    bool edge = false;
+    if (now_raw == sw_disp_last && now_raw != sw_disp_stable) {
+        /* Two same-value reads in a row → new stable state. */
+        if (sw_disp_stable == 1 && now_raw == 0) edge = true;   /* HIGH→LOW press */
+        sw_disp_stable = now_raw;
+    }
+    sw_disp_last = now_raw;
+    return edge;
+}
+
 static void render_task(void *arg)
 {
     (void)arg;
@@ -798,7 +840,13 @@ static void render_task(void *arg)
 
     for (;;) {
         TickType_t now = xTaskGetTickCount();
-        if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
+        /* SW2 short-press: advance page immediately + reset the auto-cycle
+         * dwell so a tap doesn't get immediately overridden. */
+        if (sw_disp_pressed_edge()) {
+            page = (uint8_t)((page + 1) & 0x03U);
+            last_cycle = now;
+            printf("[bringup] SW2 → page %u\n", (unsigned)page);
+        } else if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
             page = (page + 1) & 0x03U;
             last_cycle = now;
         }
@@ -871,7 +919,8 @@ static void sensors_task(void *arg)
     printf("[bringup] UUID = %s\n", g_id.uuid);
     printf("[bringup] broker = %s:%u\n", broker_addr_str(), (unsigned)g_broker.port);
 
-    /* ── I²C + sensor probes (independent of network) ────────────────── */
+    /* ── Discrete GPIO + I²C + sensor probes (independent of network) ── */
+    discrete_gpio_init();
     i2c_bus_init();
     i2c_scan();
 
@@ -899,9 +948,13 @@ static void sensors_task(void *arg)
     printf("[bringup] SH1122 init %s (rc=%d)\n", s_oled_ok ? "OK" : "FAILED", (int)eo);
 #endif
 #if SENSOR_LIGHT_ON
-    err_t eb = bh1750_init(&s_bh, BOARD_I2C_INST, BOARD_BH1750_ADDR);
-    s_bh_ok = (eb == ERR_OK);
-    printf("[bringup] BH1750 init %s (rc=%d)\n", s_bh_ok ? "OK" : "FAILED", (int)eb);
+    /* Pick BH1750 (advanced) or GL5516 (generic) from /cfg/sensors.json. */
+    s_light = light_select_from_config();
+    err_t eb = s_light ? s_light->init(s_light->ctx) : ERR_FAIL;
+    s_light_ok = (eb == ERR_OK);
+    printf("[bringup] light(%s) init %s (rc=%d)\n",
+           s_light ? s_light->name : "?",
+           s_light_ok ? "OK" : "FAILED", (int)eb);
 #endif
 #if SENSOR_RADAR_ON
     /* For now the bring-up only supports the BHA2; C1001 selection lives in
@@ -927,6 +980,11 @@ static void sensors_task(void *arg)
     }
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     printf("[bringup] CONNECTED — IP = %s\n", ip ? ip4addr_ntoa(ip) : "(none)");
+    /* WiFi LED indicates association — lit once we have an IP. If we later
+     * lose the link (handled by the MQTT reconnect path), we leave the LED
+     * on for now; tracking link drops would need polling cyw43_tcpip_link_status
+     * which is fine to add when transport_selector lands. */
+    gpio_put(BOARD_LED_WIFI_PIN, ip ? 1 : 0);
 #if OLED_ON
     snprintf(s_wifi_ip, sizeof(s_wifi_ip), "%s", ip ? ip4addr_ntoa(ip) : "----");
 #endif

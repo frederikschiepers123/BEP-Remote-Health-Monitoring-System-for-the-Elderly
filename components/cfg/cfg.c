@@ -97,9 +97,22 @@ err_t cfg_load_sensors(CfgSensors *out) {
         if      (strcmp(env, "bme280") == 0) out->env = CFG_ENV_BME280;
         else if (strcmp(env, "aht21")  == 0) out->env = CFG_ENV_AHT21;
         else { LOG_E("sensors.json: unknown env '%s'", env); return ERR_INVALID_ARG; }
-        LOG_I("sensors: radar=%s env=%s", kind, env);
     } else {
-        LOG_I("sensors: radar=%s env=(default, BME280)", kind);
+        snprintf(env, sizeof(env), "(default)");
     }
+
+    /* `light` is optional; absent means BH1750 (the advanced-module default,
+     * which is what's physically demoed in this project). See ADR-0001. */
+    char light[16];
+    out->light = CFG_LIGHT_DEFAULT;
+    if (json_get_string(buf, toks, n, "light", light, sizeof(light)) == ERR_OK) {
+        if      (strcmp(light, "bh1750") == 0) out->light = CFG_LIGHT_BH1750;
+        else if (strcmp(light, "gl5516") == 0) out->light = CFG_LIGHT_GL5516;
+        else { LOG_E("sensors.json: unknown light '%s'", light); return ERR_INVALID_ARG; }
+    } else {
+        snprintf(light, sizeof(light), "(default)");
+    }
+
+    LOG_I("sensors: radar=%s env=%s light=%s", kind, env, light);
     return ERR_OK;
 }
