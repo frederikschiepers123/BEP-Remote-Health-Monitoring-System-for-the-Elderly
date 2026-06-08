@@ -44,6 +44,7 @@ static volatile UiPage s_current_page = UI_PAGE_STATUS;
 
 static char             s_net_ip[16] = "----";
 static volatile bool    s_net_mqtt_ok = false;
+static char             s_diag[24] = "boot";
 
 static volatile float   s_env_temp = 0.0f, s_env_hum = 0.0f, s_env_pres = 0.0f;
 static volatile bool    s_env_pres_valid = false;
@@ -73,6 +74,13 @@ void ui_oled_set_net(const char *ip, bool mqtt_ok)
         snprintf(s_net_ip, sizeof(s_net_ip), "%s", ip);
     }
     s_net_mqtt_ok = mqtt_ok;
+}
+
+void ui_oled_set_diag(const char *msg)
+{
+    if (msg) {
+        snprintf(s_diag, sizeof(s_diag), "%s", msg);
+    }
 }
 
 void ui_oled_set_env(float temp_c, float hum_pct, float pres_hpa,
@@ -157,8 +165,9 @@ static void render_status(Sh1122 *o)
     sh1122_draw_text(o, 0, 18, 2, line);
     snprintf(line, sizeof(line), "WIFI %s", s_net_ip);
     sh1122_draw_text(o, 0, 36, 2, line);
-    snprintf(line, sizeof(line), "MQTT %s", s_net_mqtt_ok ? "OK" : "--");
-    sh1122_draw_text(o, 0, 50, 1, line);
+    snprintf(line, sizeof(line), "MQTT %s  %s",
+             s_net_mqtt_ok ? "OK" : "--", s_diag);
+    sh1122_draw_text(o, 0, 52, 1, line);
     page_indicator(o, 1);
 }
 

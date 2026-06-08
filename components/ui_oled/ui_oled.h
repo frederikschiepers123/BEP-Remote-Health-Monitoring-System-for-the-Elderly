@@ -57,6 +57,14 @@ void ui_oled_next_page(void);
 /** Network/broker line: IP string (≤15 chars, copied) and MQTT-up flag. */
 void ui_oled_set_net(const char *ip, bool mqtt_ok);
 
+/**
+ * Bring-up diagnostic line shown on the STATUS page (≤23 chars, copied).
+ * transport_task updates this at each stage (cyw43/assoc/TLS/MQTT) with the
+ * actual rc on failure, so the screen shows where bring-up stops even when
+ * the USB log console is unavailable.
+ */
+void ui_oled_set_diag(const char *msg);
+
 /** Latest env sample.  pres_valid=false renders pressure as "—" (AHT21). */
 void ui_oled_set_env(float temp_c, float hum_pct, float pres_hpa,
                      bool pres_valid, uint8_t q);

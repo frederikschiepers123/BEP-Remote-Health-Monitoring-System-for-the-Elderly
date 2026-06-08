@@ -143,6 +143,13 @@ static void connect_cb(mqtt_client_t *c, void *arg, mqtt_connection_status_t st)
     LOG_I("MQTT CONNACK status=%d %s", st,
           st == MQTT_CONNECT_ACCEPTED ? "ACCEPTED" : "(rejected)");
     s_connected = (st == MQTT_CONNECT_ACCEPTED);
+    if (st == MQTT_CONNECT_ACCEPTED) {
+        ui_oled_set_diag("MQTT up");
+    } else {
+        char d[24];
+        snprintf(d, sizeof(d), "CONNACK rej %d", (int)st);
+        ui_oled_set_diag(d);
+    }
     if (s_connected) {
         s_backoff_ms = 1000;   /* reset backoff on success */
         /* status=online retained (matches LWT shape). Already in lwIP ctx. */
@@ -158,6 +165,7 @@ static void mqtt_connect_now(void)
     LOG_I("mqtt_client_connect -> %s:%u (backoff %lu ms)",
           ipaddr_ntoa(&s_broker_addr), (unsigned)s_broker->port,
           (unsigned long)s_backoff_ms);
+    ui_oled_set_diag("mqtt connect..");
     cyw43_arch_lwip_begin();
     err_t e = mqtt_client_connect(s_mqtt, &s_broker_addr, s_broker->port,
                                   connect_cb, NULL, &s_ci);
@@ -171,38 +179,63 @@ static void mqtt_connect_now(void)
 
 static bool wifi_bring_up(void)
 {
+    char diag[24];
+
+    ui_oled_set_diag("cyw43 init..");
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS) != 0) {
         LOG_E("cyw43 init FAILED");
+        ui_oled_set_diag("CYW43 INIT FAIL");
         return false;
     }
     cyw43_arch_enable_sta_mode();
+
+    if (s_wifi->ssid[0] == '\0') {
+        LOG_E("no SSID in /cfg/wifi.json");
+        ui_oled_set_diag("NO SSID CFG");
+        return false;
+    }
+
     LOG_I("connecting to SSID '%s' ...", s_wifi->ssid);
+    snprintf(diag, sizeof(diag), "assoc %.10s..", s_wifi->ssid);
+    ui_oled_set_diag(diag);
     int rc = cyw43_arch_wifi_connect_timeout_ms(s_wifi->ssid, s_wifi->psk,
                                                 CYW43_AUTH_WPA2_AES_PSK, 30000);
     if (rc != 0) {
         /* rc=-7 BADAUTH, -8 CONNECT_FAILED (5 GHz/WPA3-only AP), -2 NONET. */
         LOG_W("wifi connect FAILED rc=%d — sensor-only mode", rc);
+        snprintf(diag, sizeof(diag), "WIFI FAIL rc=%d", rc);
+        ui_oled_set_diag(diag);
         return false;
     }
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     LOG_I("CONNECTED — IP = %s", ip ? ip4addr_ntoa(ip) : "(none)");
     gpio_put(BOARD_LED_WIFI_PIN, ip ? 1 : 0);
     ui_oled_set_net(ip ? ip4addr_ntoa(ip) : "----", false);
+    ui_oled_set_diag("wifi ok");
     return true;
 }
 
 static bool mqtt_setup(void)
 {
     LOG_I("building altcp_tls config (mTLS, ECDSA P-256)");
+    ui_oled_set_diag("tls cfg..");
     s_tls_cfg = altcp_tls_create_config_client_2wayauth(
         s_id->ca_der,      s_id->ca_len,
         s_id->dev_key_der, s_id->dev_key_len,
         NULL, 0,
         s_id->dev_crt_der, s_id->dev_crt_len);
-    if (!s_tls_cfg) { LOG_E("altcp_tls config FAILED"); return false; }
+    if (!s_tls_cfg) {
+        LOG_E("altcp_tls config FAILED");
+        ui_oled_set_diag("TLS CFG FAIL");
+        return false;
+    }
 
     s_mqtt = mqtt_client_new();
-    if (!s_mqtt) { LOG_E("mqtt_client_new FAILED"); return false; }
+    if (!s_mqtt) {
+        LOG_E("mqtt_client_new FAILED");
+        ui_oled_set_diag("MQTT NEW FAIL");
+        return false;
+    }
 
     snprintf(s_topic_status, sizeof(s_topic_status), "rmms/%s/status", s_id->uuid);
     snprintf(s_topic_env,    sizeof(s_topic_env),    "rmms/%s/env",    s_id->uuid);
@@ -328,6 +361,7 @@ void transport_task(void *arg)
         } else {
             LOG_W("broker '%s' not resolvable yet — will keep retrying",
                   broker_addr_str());
+            ui_oled_set_diag("broker resolve?");
         }
     } else {
         LOG_W("no Wi-Fi — sensor tasks still run; publishing disabled");
