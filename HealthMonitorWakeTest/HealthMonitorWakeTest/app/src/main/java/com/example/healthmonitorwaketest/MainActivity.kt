@@ -111,7 +111,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
@@ -165,11 +164,7 @@ class MainActivity : AppCompatActivity() {
             val intent =
                 Intent(this, WakeService::class.java)
 
-            if (Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            startForegroundService(intent)
         }
 
         offButton.setOnClickListener {
