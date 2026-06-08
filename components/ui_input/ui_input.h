@@ -4,8 +4,9 @@
 /* Button input driver — GPIO interrupt-driven with FreeRTOS debounce.
  *
  * Hardware:
- *   BOARD_BTN_A_PIN (GPIO20) — active-low, internal pull-up.
- *   BOARD_BTN_B_PIN (GPIO21) — active-low, internal pull-up.
+ *   BOARD_BTN_DISPLAY_PIN (SW2, GPIO16) — active-low, external 1 kΩ pull-up.
+ *   The v1 PCB exposes one user button (cycle the OLED page); the other
+ *   physical switch is RUN/reset and needs no firmware.
  *
  * Debounce:
  *   A falling-edge interrupt starts a one-shot FreeRTOS software timer
@@ -26,8 +27,7 @@
 /* ── Button enumeration ──────────────────────────────────────────────────── */
 
 typedef enum {
-    BTN_A = 0,
-    BTN_B = 1,
+    BTN_DISPLAY = 0,   /* SW2 — advances the OLED page */
 } Button;
 
 /* ── Callback type ───────────────────────────────────────────────────────── */

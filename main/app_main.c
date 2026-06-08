@@ -89,7 +89,7 @@ void wdt_task_alive(WdtTaskId id)
 static void button_handler(Button btn, void *user)
 {
     (void)user;
-    if (btn == BTN_A || btn == BTN_B) {
+    if (btn == BTN_DISPLAY) {
         ui_oled_next_page();
     }
 }

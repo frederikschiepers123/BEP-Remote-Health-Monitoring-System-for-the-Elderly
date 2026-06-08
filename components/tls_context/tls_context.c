@@ -13,10 +13,22 @@
 #include "mbedtls/pk.h"
 #include "mbedtls/error.h"
 #include "mbedtls/debug.h"
+#include "mbedtls/platform_time.h"
+
+#include "pico/time.h"
 
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+
+/* Platform shim required by MBEDTLS_PLATFORM_MS_TIME_ALT (mbedtls_config.h).
+ * Returns monotonic milliseconds since boot — no wall clock until time/set is
+ * wired (§16 Q6), but TLS session-ticket expiry timing only needs a monotonic
+ * source. The firmware-proper home for the shim each bring-up carried locally. */
+mbedtls_ms_time_t mbedtls_ms_time(void)
+{
+    return (mbedtls_ms_time_t)(time_us_64() / 1000u);
+}
 
 /* ── allowed cipher suites ──────────────────────────────────────────── */
 /* ECDHE-ECDSA-AES128-GCM-SHA256 and ECDHE-ECDSA-AES256-GCM-SHA384 only.
