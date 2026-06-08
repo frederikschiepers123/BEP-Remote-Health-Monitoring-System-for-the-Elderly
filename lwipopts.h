@@ -43,9 +43,22 @@
 #define LWIP_DNS                        1
 #define DNS_TABLE_SIZE                  4
 
-/* ── mDNS ─────────────────────────────────────────────────────────────────── */
-#define LWIP_MDNS_RESPONDER             1
-#define MDNS_MAX_SERVICES               2
+/* ── mDNS — resolver only (we query *.local, we do NOT advertise) ──────────
+ * The single load-bearing flag is LWIP_DNS_SUPPORT_MDNS_QUERIES: it makes
+ * dns_gethostbyname() route any "*.local" name to a multicast query at
+ * 224.0.0.251:5353 instead of to the unicast DNS server. lwIP issues that
+ * query from an ephemeral UDP source port, so RFC 6762 §6.7-compliant
+ * responders (avahi, Bonjour) reply by *unicast* back to that port — the
+ * response lands on our own unicast MAC, so no IGMP / multicast-MAC-filter
+ * setup is needed for the common case. resolve_broker_host() needs no code
+ * change; it already calls dns_gethostbyname (sensors_publish.c).
+ *
+ * LWIP_MDNS_RESPONDER is the *advertise* side (apps/mdns). We do not link it
+ * (no target pulls pico_lwip_mdns), so it is off. Do not confuse the two:
+ * the responder does not let us resolve names, and turning it on would need
+ * LWIP_IGMP=1 just to compile (mdns.c #error). See CLAUDE.md §8.2.            */
+#define LWIP_DNS_SUPPORT_MDNS_QUERIES   1
+#define LWIP_MDNS_RESPONDER             0
 
 /* ── TLS / mbedTLS ────────────────────────────────────────────────────────── */
 #define LWIP_ALTCP                      1

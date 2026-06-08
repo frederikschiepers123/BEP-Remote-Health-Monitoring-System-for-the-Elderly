@@ -56,9 +56,14 @@
 #define LWIP_DNS                        1
 #define DNS_TABLE_SIZE                  4
 
-/* ── mDNS ─────────────────────────────────────────────────────────────────── */
-#define LWIP_MDNS_RESPONDER             1
-#define MDNS_MAX_SERVICES               2
+/* ── mDNS — resolver only (we query *.local, we do NOT advertise) ──────────
+ * Mirror of root lwipopts.h. LWIP_DNS_SUPPORT_MDNS_QUERIES makes
+ * dns_gethostbyname() route "*.local" to a multicast query at
+ * 224.0.0.251:5353; RFC 6762 §6.7 responders reply unicast to our ephemeral
+ * source port, so no IGMP is needed. resolve_broker_host() is unchanged.
+ * The responder (advertise) side stays off — not linked here either.        */
+#define LWIP_DNS_SUPPORT_MDNS_QUERIES   1
+#define LWIP_MDNS_RESPONDER             0
 
 /* ── TLS / mbedTLS (linked but not exercised by this bring-up) ───────────── */
 #define LWIP_ALTCP                      1

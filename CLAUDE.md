@@ -430,16 +430,36 @@ reading" case the previous group documented.
 - `cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS)`.
 - Credentials in littlefs at `/cfg/wifi.json`. Provisioned at factory or over
   USB-CDC at first boot — no SoftAP, no captive portal.
-- Broker address resolution (production target):
+- Broker address resolution:
   1. `/cfg/broker.json` `ip` field, if present and parseable → use directly.
-  2. `/cfg/broker.json` `host` field → DNS lookup via lwIP `dns_gethostbyname`.
-  3. If the host is a `*.local` mDNS name → mDNS query (separate lwIP module,
-     **future work**). The current bring-up does steps 1 and 2 only.
+  2. `/cfg/broker.json` `host` field → resolved via lwIP `dns_gethostbyname`.
+     This handles **both** ordinary unicast DNS *and* `*.local` Multicast-DNS:
+     enabling `LWIP_DNS_SUPPORT_MDNS_QUERIES` (lwipopts.h) makes
+     `dns_gethostbyname` route any `*.local` name to a multicast query at
+     `224.0.0.251:5353` instead of the unicast DNS server. `resolve_broker_host`
+     needs no name-type branching — it just calls `dns_gethostbyname`.
+
+  mDNS resolver vs. responder — do not confuse them:
+    - The **resolver** (`LWIP_DNS_SUPPORT_MDNS_QUERIES`) is what we enable; it
+      lets us *query* `tablet.local`. lwIP sends the query from an ephemeral
+      UDP port, so an RFC 6762 §6.7-compliant responder replies **unicast** to
+      that port — the reply lands on our own MAC, so no IGMP / multicast-MAC
+      filter is needed on the device side.
+    - `LWIP_MDNS_RESPONDER` is the *advertise* side (apps/mdns). We do **not**
+      link or use it; turning it on would need `LWIP_IGMP=1` just to compile
+      (mdns.c `#error`). Enabling the responder does not let us resolve names.
+
+  The tablet runs the responder that advertises `tablet.local` →
+  `scripts/tablet_mdns_responder.py` (python-zeroconf in Termux; avahi needs
+  root/dbus and is unreliable there). `demo_start.sh` starts it each session.
+  Because the name is stable, `/cfg/broker.json` is provisioned **once** with
+  `{"host":"tablet.local","ip":""}` and never needs editing across networks or
+  DHCP changes — the device finds the broker by name. (Android suppresses
+  multicast RX with the screen off; keep the tablet awake during a demo.)
 
   The previous group's UDP-broadcast discovery scheme is dead and **must not
-  be reintroduced**. For hotspot/mDNS-only LANs where no DNS resolves
-  `tablet.local`, `demo_start.sh` writes the literal tablet IP into
-  `/cfg/broker.json` each session, so step 1 always succeeds.
+  be reintroduced**. If mDNS is unavailable on a given LAN, the fallback is to
+  re-provision `/cfg/broker.json` with a literal `ip`.
 - TLS stack: **identical** to the USB-CDC path — same mbedTLS configuration,
   same cert chain, same cipher suites. The only difference is the underlying
   `stream_t` backend (lwIP TCP instead of TinyUSB CDC).

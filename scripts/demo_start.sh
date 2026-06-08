@@ -4,32 +4,32 @@
 # Usage:
 #   scripts/demo_start.sh <tablet-ip> [device-uuid]
 #
-# What it does (≈15 seconds + one MM² boot):
-#   1. Refresh broker cert + restart Mosquitto for today's tablet IP.
-#   2. Update MagicMirror² bridge config to point at today's IP.
-#   3. Update broker.json in the DEMO DEVICE bundle to today's IP and copy
-#      that bundle (plus the provision driver) to /mnt/c/Users/frede/ so
-#      PowerShell can immediately re-push to the Pico.
-#   4. Kill any process holding :8080 and start MagicMirror² in background,
-#      logging to /tmp/mm2.log.
+# What it does (≈20 seconds + one MM² boot):
+#   1. Refresh the broker cert + restart Mosquitto for today's tablet IP.
+#   2. Start the tablet's mDNS responder so `tablet.local` resolves on the LAN
+#      (this is what lets the Pico find the broker by name — see §8.2 / ADR).
+#   3. Point the MagicMirror² bridge at the broker IP (the bridge runs in WSL,
+#      which has no mDNS resolver, so it still needs the literal IP).
+#   4. Refresh the demo device bundle on the Windows side (host-only broker.json)
+#      for the *one-time* provisioning; see note below.
+#   5. (Re)start MagicMirror², logging to /tmp/mm2.log.
+#
+# THE PAYOFF (mDNS): broker.json is now host-only (`tablet.local`, empty ip).
+# Once the demo Pico has been provisioned with it ONCE, the IP can change every
+# session and the Pico still finds the broker by name — NO re-provisioning, NO
+# reflash. Each session you just: run this script, power the Pico, open the
+# browser. The Windows bundle copy below exists only for the first-ever provision
+# (or to recover a wiped device).
 #
 # NOTE: refresh_broker.sh (step 1) calls provision_ca.sh, which mints a NEW
 # random-UUID device bundle every run. We must NOT pick "newest device dir"
-# here — that's always the throwaway. Instead we target a fixed demo device
-# (DEMO_UUID below, overridable as $2). Its certs are signed by the same
-# stable CA as the broker cert, so mTLS still validates after a broker refresh.
-#
-# Manual steps that remain:
-#   - Flash bringup_provision.uf2 to the Pico (BOOTSEL).
-#   - In PowerShell:
-#       py -3.13 provision_device.py COM<N> device-<uuid>
-#   - Flash bringup_sensors_slow.uf2.
-#   - Open http://localhost:8080 in a browser.
+# here — that's always the throwaway. We target a fixed demo device (DEMO_UUID,
+# overridable as $2); its certs are signed by the same stable CA as the broker
+# cert, so mTLS still validates after a broker refresh.
 
 set -euo pipefail
 
-# Fixed demo device — the one we actually provision to the bench Pico.
-# Override by passing a second arg if the demo board ever changes identity.
+# Fixed demo device — the one provisioned to the bench Pico.
 DEMO_UUID_DEFAULT="52295a51-1a2d-4b2f-bedd-dacbbc1685f0"
 
 TIP="${1:-}"
@@ -46,59 +46,80 @@ WIN_HOME="${WIN_HOME:-/mnt/c/Users/frede}"
 MM_DIR="$REPO_DIR/MagicMirror"
 MM_CONFIG="$MM_DIR/config/config.js"
 MM_LOG="${MM_LOG:-/tmp/mm2.log}"
+TERMUX_USER="${TERMUX_USER:-u0_a76}"
+TERMUX_PORT="${TERMUX_PORT:-8022}"
+RMMS_DIR="${RMMS_DIR:-/data/data/com.termux/files/home/rmms}"
 
 step() { printf "\n\033[1;36m[demo] %s\033[0m\n" "$*"; }
+ssh_t() { ssh -p "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${TERMUX_USER}@${TIP}" "$@"; }
 
-# ── 1. Broker ────────────────────────────────────────────────────────────────
-step "refreshing broker cert for $TIP"
+# ── 1. Broker cert + Mosquitto ───────────────────────────────────────────────
+step "refreshing broker cert + restarting Mosquitto for $TIP"
 ./scripts/refresh_broker.sh "$TIP"
 
-# ── 2. Mirror config ─────────────────────────────────────────────────────────
+# ── 2. Tablet mDNS responder (so tablet.local resolves on the LAN) ───────────
+step "starting tablet mDNS responder (tablet.local)"
+scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
+    scripts/tablet_mdns_responder.py "${TERMUX_USER}@${TIP}:${RMMS_DIR}/" >/dev/null
+# setsid + nohup + python3 -u keeps it alive after this SSH session closes and
+# flushes its log immediately. Android suppresses multicast RX with the screen
+# off, so keep the tablet awake during the demo.
+ssh_t "
+  pkill -f tablet_mdns_responder.py 2>/dev/null || true
+  sleep 0.5
+  cd '$RMMS_DIR'
+  setsid nohup python3 -u tablet_mdns_responder.py tablet </dev/null > mdns.log 2>&1 &
+  sleep 2
+  cat mdns.log
+" || echo "[demo] WARNING: responder start failed — Pico will fall back to a literal IP only if broker.json has one"
+
+# ── 3. Mirror bridge config (WSL has no mDNS resolver → literal IP) ───────────
 step "pointing MagicMirror bridge at mqtts://$TIP:8883"
 sed -i -E "s|mqtts://[0-9.]+:8883|mqtts://$TIP:8883|" "$MM_CONFIG"
 grep "broker.*mqtts" "$MM_CONFIG"
 
-# ── 3. Device bundle ────────────────────────────────────────────────────────
-# Target the FIXED demo device, not the newest dir (which is the throwaway
-# provision_ca.sh just minted inside refresh_broker.sh — see header note).
+# ── 4. Demo device bundle — host-only broker.json (one-time provision) ───────
 DEVDIR="out/device-$DEMO_UUID"
 if [ ! -d "$DEVDIR" ]; then
     echo "[demo] ERROR: demo device bundle not found: $DEVDIR" >&2
     echo "[demo] Provision it once with: DEVICE_UUID=$DEMO_UUID ./scripts/provision_ca.sh <label>" >&2
     exit 1
 fi
-step "updating $DEVDIR/broker.json -> $TIP"
+step "writing host-only broker.json (tablet.local) into $DEVDIR"
 cat > "$DEVDIR/broker.json" <<EOF
-{"_v":1,"host":"tablet.local","ip":"$TIP","port":8883}
+{"_v":1,"host":"tablet.local","ip":"","port":8883}
 EOF
 cp -r "$DEVDIR" "$WIN_HOME/"
 cp scripts/provision_device.py "$WIN_HOME/"
-echo "[demo] copied $DEVDIR + provision_device.py to $WIN_HOME/"
+echo "[demo] copied $DEVDIR + provision_device.py to $WIN_HOME/ (only needed for first-time provision)"
 
-# ── 4. MagicMirror² ─────────────────────────────────────────────────────────
+# ── 5. MagicMirror² ──────────────────────────────────────────────────────────
 step "(re)starting MagicMirror²"
-# Free port 8080 if held
 if PID=$(ss -tlnp 2>/dev/null | awk '/:8080/ {match($0, /pid=([0-9]+)/, m); print m[1]; exit}'); then
     [ -n "$PID" ] && { echo "[demo] killing PID $PID on :8080"; kill "$PID" 2>/dev/null || kill -9 "$PID" 2>/dev/null || true; sleep 1; }
 fi
-
 ( cd "$MM_DIR" && nohup npm run server > "$MM_LOG" 2>&1 & disown )
 sleep 5
 echo "[demo] MagicMirror log (first lines):"
 grep -E "Ready to go|MQTT|Subscribed|ERROR" "$MM_LOG" | tail -10 || tail -10 "$MM_LOG"
 
-# ── 5. Manual checklist ─────────────────────────────────────────────────────
+# ── 6. What's left ───────────────────────────────────────────────────────────
 cat <<EOM
 
-[demo] laptop side done. Now from Windows PowerShell:
+[demo] laptop side done.
 
+If the demo Pico is ALREADY provisioned with the host-only broker.json
+(tablet.local), you are done — just power the Pico and open
+http://localhost:8080. It resolves the broker by name; no reflash, no
+re-provision, even though the IP changed.
+
+FIRST-TIME ONLY (or after a device wipe), from Windows PowerShell:
     cd C:\\Users\\frede
-    # push today's broker.json to the Pico's littlefs
-    # (flash bringup_provision.uf2 first via BOOTSEL drag-and-drop)
+    # flash bringup_provision.uf2 via BOOTSEL, then:
     py -3.13 provision_device.py COM<N> device-$DEMO_UUID
+    # then flash bringup_sensors_slow.uf2
 
-Then flash bringup_sensors_slow.uf2 (already at C:\\Users\\frede\\) and open
-http://localhost:8080 in a browser. Tail \`tail -f $MM_LOG\` to watch the
-bridge connect.
+Keep the tablet screen ON (Android suppresses multicast with the screen off).
+Watch the bridge connect: tail -f $MM_LOG
 
 EOM
