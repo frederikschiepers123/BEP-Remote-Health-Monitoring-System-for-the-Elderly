@@ -1,0 +1,51 @@
+.vidConfWrapper {
+    width: 100%;
+    height: 83vh;
+}
+
+.conferenceCard {
+    display: flex;
+    flex-direction: column;
+
+    width: 100%;
+    height: 100%;
+
+    background: rgba(0,20,46,1);
+
+    border-radius: 2vh;
+
+    padding: 1.5vh;
+    box-sizing: border-box;
+}
+
+.conferenceHeader {
+    background: rgba(0,74,173,1);
+
+    border-radius: 1.5vh;
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    height: 10%;
+
+    font-size: 4vh;
+    font-weight: 700;
+
+    color: white;
+}
+
+.conferenceBody {
+    flex: 1;
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.conferenceIcon {
+    font-size: 30vh;
+    color: white;
+
+    line-height: 1;
+}

@@ -56,6 +56,10 @@ let config = {
 			position: "top_center"
 		},
 		{
+			module: "MMM-VidConf",
+			position: "top_center"
+		},
+		{
 			module: "MMM-CustomMQTTBridge",
 			// position: "top_right",
 			/*
@@ -74,26 +78,35 @@ let config = {
 				topics:   ["rmms/+/+"]
 			}
 		},
-		// {  // or use example with encryption
-		// 	module: 'MMM-MQTTbridge',
-		// 	disabled: false,
-		// 	config: {
-		// 		mqttServer: "mqtt://:@localhost:1883",
-		// 		mqttConfig:
-		// 		{
-		// 			listenMqtt: true,
-		// 			interval: 300000,
-		// 		},
-		// 		notiConfig:
-		// 		{
-		// 			listenNoti: true,
-		// 			ignoreNotiId: ["CLOCK_MINUTE", "NEWS_FEED"],
-		// 			ignoreNotiSender: ["system", "NEWS_FEED"],
-		// 		},
-		// 	// set "NOTIFICATIONS -> MQTT" dictionary at /dict/notiDictionary.js
-		// 	// set "MQTT -> NOTIFICATIONS" dictionary at /dict/mqttDictionary.js
-		// 	},
-		// },
+	    {
+			module: "MMM-pages",
+			config: {
+				timings: {
+					default: 5000,               // rotate every 5 seconds
+					0: 20000,                    // page 0 rotates every 20 seconds
+					"admin": 30000               // admin hidden page auto-returns after 30 seconds
+				},
+				modules: [
+					["MMM-SensorUI"], // page 0
+					["MMM-VidConf"],  // page 1
+				],
+				fixed: [                         // modules that are always shown
+					"clock",
+
+					// "MMM-page-indicator"
+				],
+				// hiddenPages: {                   // modules that are only shown on specific pages
+				// 	"screenSaver": [
+				// 		"clock",
+				// 		"MMM-BackgroundSlideshow"
+				// 	],
+				// 	"admin": [
+				// 		"MMM-SystemMonitor",
+				// 		"MMM-OnScreenMenu"
+				// 	]
+				// }
+			}
+		},
 		// {
 		// 	module: 'MMM-Template',
 		// 	position: 'lower_third',
