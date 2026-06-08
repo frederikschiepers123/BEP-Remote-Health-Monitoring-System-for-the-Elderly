@@ -1129,10 +1129,25 @@ production:
 ## 14. Testing
 
 ### 14.1 Host unit tests
-- CMocka, built natively with the host's compiler against the same source files.
+- CMocka, built natively with the host's compiler against the same driver
+  sources. Run with `test/host/run.sh` (zero-config: gcc + the stub HAL in
+  `test/host/stubs/`, CMocka from `~/.local` or the system) **or**
+  `cmake -S test/host -B build-host && ctest --test-dir build-host`. The host
+  tests are a **separate native build** — they are deliberately NOT wired into
+  the top-level CMake, which cross-compiles for the M33 and cannot produce
+  runnable host executables.
 - Drivers must be split into a "logic" half (testable on host) and a "HAL" half
   (Pico-only). The previous group put I²C transactions in the same function as
-  sample averaging — do not.
+  sample averaging — do not. The driver `.c` files include the pico-sdk /
+  FreeRTOS headers unconditionally; on the host build those resolve to the
+  minimal stubs under `test/host/stubs/` (selected first on the include path),
+  and `host_stubs.c` supplies the symbol bodies (a host-controlled clock,
+  no-op `vTaskDelay`, a loadable radar-UART byte feed, etc.). Each test mocks
+  only its own transaction surface (the I²C sequence, or the radar byte stream).
+- Current coverage: BME280 compensation, AHT21/AHT20 decode + BUSY path,
+  BH1750 lux conversion, ENS160 validity-flag extraction + STATUS-burst decode
+  + init OPMODE-stuck failure, and the MR60BHA2 frame parser (header + data
+  `~XOR` checksums, breath/heart/distance decode, corrupt-frame rejection).
 - CI runs host tests on every push.
 
 ### 14.2 Hardware-in-the-loop

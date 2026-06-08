@@ -30,8 +30,10 @@
 
 #ifdef HOST_TEST
 
-/* hardware/i2c.h stubs */
-typedef struct i2c_inst { int dummy; } i2c_inst_t;
+/* i2c_inst_t comes from the stub hardware/i2c.h; vTaskDelay/log_write from
+ * test/host/stubs/host_stubs.c. Only the BME280-specific i2c transaction
+ * sequence is mocked below. */
+#include "hardware/i2c.h"
 static i2c_inst_t i2c0_inst;
 i2c_inst_t *i2c0 = &i2c0_inst;
 
@@ -153,21 +155,7 @@ int i2c_read_blocking(i2c_inst_t *i2c, uint8_t addr,
     return (int)len;
 }
 
-/* FreeRTOS stub — bme280.c calls vTaskDelay under #ifndef HOST_TEST, so
- * this stub is never called; included for completeness. */
-void vTaskDelay(uint32_t ticks) { (void)ticks; }
-
-/* log stub */
-void log_write(int level, const char *tag, const char *fmt, ...)
-{
-    (void)level;
-    va_list ap;
-    va_start(ap, fmt);
-    fprintf(stderr, "[%s] ", tag);
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-    va_end(ap);
-}
+/* vTaskDelay + log_write are provided by test/host/stubs/host_stubs.c. */
 
 #endif /* HOST_TEST */
 

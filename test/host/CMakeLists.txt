@@ -1,47 +1,54 @@
-find_package(CMocka QUIET)
-if(NOT CMocka_FOUND)
-    message(WARNING "CMocka not found — host tests skipped (install libcmocka-dev to run)")
-    return()
+# Host-native unit tests (CLAUDE.md §14.1).
+#
+# This is a STANDALONE native project — it must NOT be configured by the
+# top-level firmware CMake (that one runs pico_sdk_init() and cross-compiles
+# for the Cortex-M33, which can't produce runnable host executables).
+#
+# Build + run:
+#   cmake -S test/host -B build-host -DCMAKE_PREFIX_PATH=$HOME/.local
+#   cmake --build build-host
+#   ctest --test-dir build-host --output-on-failure
+#
+# Or the zero-config path (no cmake): test/host/run.sh
+#
+# CMocka: apt `libcmocka-dev`, or build to ~/.local (see test/host/run.sh notes).
+
+cmake_minimum_required(VERSION 3.22)
+project(rmms_host_tests C)
+
+set(CMAKE_C_STANDARD 11)
+enable_testing()
+
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(STUBS "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
+
+find_library(CMOCKA_LIB cmocka)
+find_path(CMOCKA_INC cmocka.h)
+if(NOT CMOCKA_LIB OR NOT CMOCKA_INC)
+    message(FATAL_ERROR "CMocka not found. Pass -DCMAKE_PREFIX_PATH=$HOME/.local "
+                        "or install libcmocka-dev.")
 endif()
 
-# BME280 compensation formulas (datasheet reference vectors).
-add_executable(test_sensor_env
-    test_sensor_env.c
-    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
-)
-target_include_directories(test_sensor_env PRIVATE
-    ${CMAKE_SOURCE_DIR}/components/board
-    ${CMAKE_SOURCE_DIR}/components/log
-    ${CMAKE_SOURCE_DIR}/components/sensor_env
-)
-target_compile_definitions(test_sensor_env PRIVATE HOST_TEST=1)
-target_link_libraries(test_sensor_env PRIVATE cmocka m)
-add_test(NAME test_sensor_env COMMAND test_sensor_env)
+# add_host_test(<name> <driver-source-relative-to-repo>)
+function(add_host_test name driver)
+    add_executable(${name} ${name}.c ${REPO_ROOT}/${driver} ${STUBS}/host_stubs.c)
+    target_compile_definitions(${name} PRIVATE HOST_TEST=1)
+    target_include_directories(${name} PRIVATE
+        ${STUBS}
+        ${CMOCKA_INC}
+        ${REPO_ROOT}/components/board
+        ${REPO_ROOT}/components/log
+        ${REPO_ROOT}/components/sensor_env
+        ${REPO_ROOT}/components/sensor_air
+        ${REPO_ROOT}/components/sensor_light
+        ${REPO_ROOT}/components/sensor_radar
+    )
+    target_link_libraries(${name} PRIVATE ${CMOCKA_LIB} m)
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
 
-# AHT21 — CRC8 + 20-bit raw → temp/humidity decode.
-add_executable(test_aht21
-    test_aht21.c
-    ${CMAKE_SOURCE_DIR}/components/sensor_env/aht21.c
-)
-target_include_directories(test_aht21 PRIVATE
-    ${CMAKE_SOURCE_DIR}/components/board
-    ${CMAKE_SOURCE_DIR}/components/log
-    ${CMAKE_SOURCE_DIR}/components/sensor_env
-)
-target_compile_definitions(test_aht21 PRIVATE HOST_TEST=1)
-target_link_libraries(test_aht21 PRIVATE cmocka m)
-add_test(NAME test_aht21 COMMAND test_aht21)
-
-# BH1750 — raw_u16 / 1.2 → lux conversion.
-add_executable(test_bh1750
-    test_bh1750.c
-    ${CMAKE_SOURCE_DIR}/components/sensor_light/bh1750.c
-)
-target_include_directories(test_bh1750 PRIVATE
-    ${CMAKE_SOURCE_DIR}/components/board
-    ${CMAKE_SOURCE_DIR}/components/log
-    ${CMAKE_SOURCE_DIR}/components/sensor_light
-)
-target_compile_definitions(test_bh1750 PRIVATE HOST_TEST=1)
-target_link_libraries(test_bh1750 PRIVATE cmocka m)
-add_test(NAME test_bh1750 COMMAND test_bh1750)
+add_host_test(test_sensor_env  components/sensor_env/bme280.c)     # BME280 compensation
+add_host_test(test_aht21       components/sensor_env/aht21.c)      # AHT21/AHT20 decode
+add_host_test(test_bh1750      components/sensor_light/bh1750.c)   # BH1750 lux conversion
+add_host_test(test_ens160      components/sensor_air/ens160.c)     # ENS160 validity + decode
+add_host_test(test_radar_bha2  components/sensor_radar/radar_bha2.c) # MR60BHA2 frame parser

@@ -1,22 +1,17 @@
 #define LOG_TAG "BHA2"
-#ifndef HOST_TEST
 #include "log.h"
-#endif
 
 #include "radar_driver.h"
-#ifndef HOST_TEST
 #include "board_pico2wh.h"
-#endif
 #include "err.h"
 
-#ifndef HOST_TEST
+/* These resolve to the pico-sdk / FreeRTOS kernel on target, and to the
+ * minimal stubs under test/host/stubs on the host unit-test build. */
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "pico/time.h"
-
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
 
 #include <stdint.h>
 #include <stdbool.h>

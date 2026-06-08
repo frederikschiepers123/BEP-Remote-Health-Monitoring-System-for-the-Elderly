@@ -92,12 +92,11 @@ foreach(_tgt
     endif()
 endforeach()
 
-# ── Tests (host-native, optional) ────────────────────────────────────────────
-option(BUILD_HOST_TESTS "Build host-native unit tests (requires CMocka)" OFF)
-if(BUILD_HOST_TESTS)
-    enable_testing()
-    add_subdirectory(test/host)
-endif()
+# ── Tests (host-native) ──────────────────────────────────────────────────────
+# Host unit tests are a SEPARATE native build — they cannot be configured here
+# because this project runs pico_sdk_init() and cross-compiles for the M33.
+# Run them with:  test/host/run.sh   (or cmake -S test/host -B build-host).
+# See test/host/CMakeLists.txt and CLAUDE.md §14.1.
 
 # ── Hardware bring-up programs (CLAUDE.md §15, optional) ──────────────────────
 option(BUILD_BRINGUP "Build standalone on-target bring-up programs (§15)" OFF)

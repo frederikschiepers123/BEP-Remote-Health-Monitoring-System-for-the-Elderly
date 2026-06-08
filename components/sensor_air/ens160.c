@@ -6,10 +6,9 @@
 
 #include "hardware/i2c.h"
 
-#ifndef HOST_TEST
-#  include "FreeRTOS.h"
-#  include "task.h"
-#endif
+/* FreeRTOS resolves to the kernel on target, to test/host/stubs on host. */
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <stdint.h>
 #include <stddef.h>

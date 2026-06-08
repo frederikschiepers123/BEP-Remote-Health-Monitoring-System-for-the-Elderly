@@ -1,15 +1,13 @@
 #define LOG_TAG "AHT21"
-#ifndef HOST_TEST
 #include "log.h"
-#endif
 
 #include "aht21.h"
 #include "err.h"
 
-#ifndef HOST_TEST
+/* FreeRTOS + pico headers resolve to the kernel/SDK on target and to
+ * test/host/stubs on the host unit-test build (see test/host/). */
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -22,18 +20,9 @@
 #define AHT21_STATUS_BUSY        0x80
 #define AHT21_STATUS_CAL_BITS    0x18   /* 0x18 = calibrated */
 
-/* CRC-8 over the first 6 bytes of the response; polynomial 0x31, init 0xFF
- * (AHT2x datasheet). Matches the implementation in ASAIR's reference code. */
-static uint8_t crc8(const uint8_t *data, size_t len) {
-    uint8_t crc = 0xFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int b = 0; b < 8; b++) {
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
-        }
-    }
-    return crc;
-}
+/* NB: no CRC verify. The datasheet's 7-byte read ends in a CRC-8 (poly 0x31),
+ * but the AHT20 silicon on most "AHT21" combo breakouts NACKs the 7th byte, so
+ * the CRC failed on every cycle even with valid data. We read 6 bytes only. */
 
 static err_t i2c_write(Aht21 *dev, const uint8_t *buf, size_t len) {
     int n = i2c_write_blocking(dev->i2c, dev->addr, buf, len, false);

@@ -1,18 +1,13 @@
-/*
- * Host unit tests for the AHT21 driver — exercises the CRC8 verification and
- * the 20-bit raw → physical temp/humidity decode path with no hardware.
+/* Host unit tests for the AHT21/AHT20 decode logic.
  *
- * Test vectors are constructed analytically:
- *   rh_target = 50.0 %  →  hum_raw  = 0x80000  (rh = 2^20 / 2)
- *   t_target  = 25.0 °C → temp_raw = 0x60000  (t = (75 / 200) * 2^20)
+ * The driver reads 6 bytes (status + 5 data) and decodes two 20-bit fields.
+ * It deliberately does NOT verify a CRC: the AHT20 silicon on most "AHT21"
+ * combo breakouts NACKs the 7th byte, so a CRC check failed on every cycle
+ * even with valid data (see aht21.c). These tests pin the decode math to the
+ * datasheet example (rh=50 %, t=25 °C) and the BUSY-flag failure path.
  *
- * Packed per the AHT21 protocol (see components/sensor_env/aht21.h):
- *   [status][hum_h][hum_m][hum_l/temp_h][temp_m][temp_l][crc8]
- *     0x18  0x80  0x00     0x06         0x00    0x00   <computed>
- *
- * status = 0x18 means calibrated + not busy, so aht21_init() takes the
- * fast path (no soft-init write).
- */
+ * The pico-sdk / FreeRTOS / log symbols come from test/host/stubs; only the
+ * I²C transaction surface is mocked here. */
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -22,121 +17,69 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
-
 #include "cmocka.h"
 
-/* ── HOST_TEST stubs for pico-sdk + FreeRTOS + log ───────────────────────── */
-#ifdef HOST_TEST
+#include "aht21.h"   /* pulls stub hardware/i2c.h (defines i2c_inst_t) */
 
-typedef struct i2c_inst { int dummy; } i2c_inst_t;
-static i2c_inst_t i2c0_inst;
-i2c_inst_t *i2c0 = &i2c0_inst;
-
-/* The test orchestrates the i2c_read sequence via this small state machine:
- *   call 1: status read (init → calibrated check)
- *   call 2: 7-byte measurement read
- * If the test sets WANT_BAD_CRC, the CRC byte is corrupted so we can verify
- * aht21_read_sample fails closed. */
-static int s_read_call = 0;
-static bool s_want_bad_crc = false;
-
-/* CRC-8 (poly 0x31, init 0xFF) — duplicate the driver's local helper here so
- * the test computes the expected byte without exposing the static function. */
-static uint8_t test_crc8(const uint8_t *data, size_t len) {
-    uint8_t crc = 0xFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int b = 0; b < 8; b++) {
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
-        }
-    }
-    return crc;
-}
+/* ── Mocked I²C transaction sequence ──────────────────────────────────────────
+ *   call 1: aht21_init status read  -> 0x18 (calibrated, not busy)
+ *   call 2: aht21_read_sample 6-byte measurement read
+ * s_status_override lets a test inject a BUSY status byte into call 2. */
+static int     s_read_call = 0;
+static uint8_t s_meas_status = 0x18;   /* raw[0] of the measurement read */
 
 int i2c_write_blocking(i2c_inst_t *i2c, uint8_t addr,
-                       const uint8_t *src, size_t len, bool nostop)
-{
-    (void)i2c; (void)addr; (void)src; (void)len; (void)nostop;
+                       const uint8_t *src, size_t len, bool nostop) {
+    (void)i2c; (void)addr; (void)src; (void)nostop;
     return (int)len;
 }
 
 int i2c_read_blocking(i2c_inst_t *i2c, uint8_t addr,
-                      uint8_t *dst, size_t len, bool nostop)
-{
+                      uint8_t *dst, size_t len, bool nostop) {
     (void)i2c; (void)addr; (void)nostop;
     s_read_call++;
-
-    if (s_read_call == 1) {
-        /* Status read: 0x18 = calibrated, not busy. Driver skips soft-init. */
+    if (s_read_call == 1) {                 /* init: status read */
         assert_int_equal(len, 1);
-        dst[0] = 0x18;
+        dst[0] = 0x18;                      /* calibrated, not busy */
         return 1;
     }
-    if (s_read_call == 2) {
-        /* 7-byte measurement read. Payload encodes rh=50 % and t=25 °C. */
-        assert_int_equal(len, 7);
-        const uint8_t body[6] = { 0x18, 0x80, 0x00, 0x06, 0x00, 0x00 };
-        memcpy(dst, body, 6);
-        dst[6] = test_crc8(body, 6);
-        if (s_want_bad_crc) dst[6] ^= 0xAA;
-        return 7;
-    }
-    return 0;
+    /* measurement read — driver asks for 6 bytes (no CRC byte) */
+    assert_int_equal(len, 6);
+    /* status + rh=50 % (0x80000) + t=25 °C (0x06<<16) */
+    const uint8_t body[6] = { s_meas_status, 0x80, 0x00, 0x06, 0x00, 0x00 };
+    memcpy(dst, body, 6);
+    return 6;
 }
 
-void vTaskDelay(uint32_t ticks) { (void)ticks; }
-#define pdMS_TO_TICKS(ms) (ms)
+static i2c_inst_t s_i2c;
 
-void log_write(int level, const char *tag, const char *fmt, ...)
-{
-    (void)level;
-    va_list ap; va_start(ap, fmt);
-    fprintf(stderr, "[%s] ", tag); vfprintf(stderr, fmt, ap); fputc('\n', stderr);
-    va_end(ap);
+static int setup(void **state) {
+    (void)state; s_read_call = 0; s_meas_status = 0x18; return 0;
 }
 
-#endif /* HOST_TEST */
-
-#include "aht21.h"
-
-/* ── Tests ───────────────────────────────────────────────────────────────── */
-
-static void test_aht21_decode_25c_50rh(void **state) {
+static void test_decode_25c_50rh(void **state) {
     (void)state;
-    extern i2c_inst_t *i2c0;
-    s_read_call = 0;
-    s_want_bad_crc = false;
-
     Aht21 dev;
-    assert_int_equal(aht21_init(&dev, i2c0, 0x38), ERR_OK);
-
+    assert_int_equal(aht21_init(&dev, &s_i2c, 0x38), ERR_OK);
     Aht21Sample s;
     assert_int_equal(aht21_read_sample(&dev, &s), ERR_OK);
-
-    /* Allow 0.05 deg / 0.05 % tolerance — the 20-bit quantization is
-     * coarser than that but the synthetic input lands exactly on a code. */
     assert_true(fabs(s.temp_c       - 25.0) < 0.05);
     assert_true(fabs(s.humidity_pct - 50.0) < 0.05);
 }
 
-static void test_aht21_crc_failure_is_io_error(void **state) {
+static void test_busy_status_is_busy_error(void **state) {
     (void)state;
-    extern i2c_inst_t *i2c0;
-    s_read_call = 0;
-    s_want_bad_crc = true;
-
+    s_meas_status = 0x98;                   /* BUSY bit (0x80) set */
     Aht21 dev;
-    assert_int_equal(aht21_init(&dev, i2c0, 0x38), ERR_OK);
-
+    assert_int_equal(aht21_init(&dev, &s_i2c, 0x38), ERR_OK);
     Aht21Sample s;
-    /* Read should refuse to silently propagate corrupted data. */
-    assert_int_equal(aht21_read_sample(&dev, &s), ERR_IO);
+    assert_int_equal(aht21_read_sample(&dev, &s), ERR_BUSY);
 }
 
 int main(void) {
     const struct CMUnitTest tests[] = {
-        cmocka_unit_test(test_aht21_decode_25c_50rh),
-        cmocka_unit_test(test_aht21_crc_failure_is_io_error),
+        cmocka_unit_test_setup(test_decode_25c_50rh,        setup),
+        cmocka_unit_test_setup(test_busy_status_is_busy_error, setup),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

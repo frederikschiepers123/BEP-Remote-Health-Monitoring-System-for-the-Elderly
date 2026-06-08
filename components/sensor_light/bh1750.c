@@ -1,15 +1,12 @@
 #define LOG_TAG "BH1750"
-#ifndef HOST_TEST
 #include "log.h"
-#endif
 
 #include "bh1750.h"
 #include "err.h"
 
-#ifndef HOST_TEST
+/* FreeRTOS resolves to the kernel on target, to test/host/stubs on host. */
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
 
 #include <string.h>
 
