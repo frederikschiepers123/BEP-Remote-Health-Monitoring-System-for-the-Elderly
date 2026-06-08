@@ -49,6 +49,12 @@
 #define MEMP_NUM_TCP_SEG                32   /* >= TCP_SND_QUEUELEN (lwIP sanity) */
 #define MEMP_NUM_PBUF                   16
 #define MEMP_NUM_UDP_PCB                4
+/* The default (~8) is too small once altcp_tls (mbedTLS) + the lwIP MQTT raw
+ * API + the cyw43/DHCP timers all run: lwIP panics mid-TLS-handshake with
+ * "sys_timeout: pool MEMP_SYS_TIMEOUT is empty" (proven during bring-up —
+ * see memory project-mtls-mqtt-proven). The transport_task uses the exact
+ * same altcp_tls + lwIP-MQTT path, so the production lwipopts needs it too. */
+#define MEMP_NUM_SYS_TIMEOUT            24
 #define PBUF_POOL_SIZE                  24
 #define PBUF_POOL_BUFSIZE               1500
 
