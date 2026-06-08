@@ -21,7 +21,7 @@
 /* Mocked register file. */
 static uint8_t s_reg_ptr   = 0;
 static uint8_t s_opmode    = 0x02;   /* what an OPMODE readback returns */
-static uint8_t s_status    = 0x02;
+static uint8_t s_status    = 0x82;   /* STATAS set (running) + NEWDAT, validity NORMAL */
 static uint8_t s_aqi       = 2;
 static uint16_t s_tvoc     = 194;
 static uint16_t s_co2      = 685;
@@ -71,6 +71,14 @@ static void test_validity_bits(void **state) {
     assert_int_equal(ens160_validity(0x83), ENS160_VALIDITY_NORMAL);
 }
 
+/* ── operating / not-operating distinction (the STATUS=0x00 fault) ────────── */
+static void test_is_operating(void **state) {
+    (void)state;
+    assert_true(ens160_is_operating(0x82));   /* STATAS set */
+    assert_false(ens160_is_operating(0x00));  /* the fault: validity bits read NORMAL but chip is stopped */
+    assert_false(ens160_is_operating(0x0A));  /* validity bits set but STATAS clear → still not running */
+}
+
 /* ── init + sample decode ────────────────────────────────────────────────── */
 static void test_init_and_decode(void **state) {
     (void)state;
@@ -82,6 +90,7 @@ static void test_init_and_decode(void **state) {
     assert_int_equal(s.aqi, 2);
     assert_int_equal(s.tvoc_ppb, 194);
     assert_int_equal(s.co2_ppm, 685);
+    assert_true(ens160_is_operating(s.status));
     assert_int_equal(ens160_validity(s.status), ENS160_VALIDITY_NORMAL);
 }
 
@@ -97,6 +106,7 @@ static void test_init_opmode_stuck_fails(void **state) {
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_validity_bits),
+        cmocka_unit_test(test_is_operating),
         cmocka_unit_test(test_init_and_decode),
         cmocka_unit_test(test_init_opmode_stuck_fails),
     };

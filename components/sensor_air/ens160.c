@@ -192,5 +192,19 @@ err_t ens160_read_sample(Ens160 *dev, Ens160Sample *out)
     LOG_D("ENS160 sample: status=0x%02X AQI=%u TVOC=%u ppb CO2=%u ppm",
           out->status, out->aqi, out->tvoc_ppb, out->co2_ppm);
 
+    /* Self-recovery: if STATAS is clear the chip is no longer running an
+     * OPMODE — it has dropped out of STANDARD mode (observed in the field as
+     * STATUS=0x00 with all-zero data, often after a power glitch or an I²C
+     * disturbance). Re-enter STANDARD so it restarts (and warms up again)
+     * rather than reporting zeros forever. Guarded on STATAS-clear, so once
+     * the chip is running (STATAS set, even during warm-up) we never re-issue
+     * — that avoids resetting the warm-up timer on every read. STATER is
+     * logged so a genuine hardware fault is visible. */
+    if (!ens160_is_operating(buf[0])) {
+        LOG_W("ENS160 not running (status=0x%02X, STATER=%d) — re-entering STANDARD",
+              buf[0], (buf[0] & ENS160_STATUS_STATER) ? 1 : 0);
+        (void)write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
+    }
+
     return ERR_OK;
 }

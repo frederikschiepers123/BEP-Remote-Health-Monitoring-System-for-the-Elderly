@@ -44,6 +44,11 @@ typedef enum {
     ENS160_VALIDITY_INVALID         = 3   /* output unusable                  */
 } Ens160Validity;
 
+/* STATUS register flag bits (DATA_STATUS, 0x20). */
+#define ENS160_STATUS_STATAS    0x80U   /* an OPMODE is running                */
+#define ENS160_STATUS_STATER    0x40U   /* high-level device error            */
+#define ENS160_STATUS_NEWDAT    0x02U   /* new sample in DATA_* registers      */
+
 static inline Ens160Validity ens160_validity(uint8_t status)
 {
     return (Ens160Validity)((status >> 2) & 0x03U);
@@ -51,7 +56,17 @@ static inline Ens160Validity ens160_validity(uint8_t status)
 
 static inline bool ens160_new_data_ready(uint8_t status)
 {
-    return (status & 0x02U) != 0U;
+    return (status & ENS160_STATUS_NEWDAT) != 0U;
+}
+
+/* True only when the chip reports an OPMODE actively running. A STATUS of
+ * 0x00 has the validity bits = 00 (which ens160_validity() would call NORMAL),
+ * but STATAS clear means the device is NOT measuring — its DATA_* registers
+ * read as zeros. Always gate "is this reading usable" on this, not on the
+ * validity field alone. */
+static inline bool ens160_is_operating(uint8_t status)
+{
+    return (status & ENS160_STATUS_STATAS) != 0U;
 }
 
 err_t ens160_init(Ens160 *dev, i2c_inst_t *i2c, uint8_t addr);

@@ -421,6 +421,13 @@ static void publish_air_sample(void)
         printf("[bringup] ENS160 read failed rc=%d\n", (int)e);
         q = 3;
         s.aqi = 0; s.co2_ppm = 0; s.tvoc_ppb = 0;
+    } else if (!ens160_is_operating(s.status)) {
+        /* STATAS clear: chip isn't running an OPMODE (the STATUS=0x00 /
+         * all-zeros fault). The validity bits read 00 here but the data is
+         * NOT normal — flag it invalid. The driver re-enters STANDARD to
+         * recover; this sample is just unusable. */
+        q = 3;
+        s.aqi = 0; s.co2_ppm = 0; s.tvoc_ppb = 0;
     } else {
         /* Map ENS160 validity flag to the q field per CLAUDE.md §9.2.2:
          *   normal       → 0 ok
@@ -453,8 +460,10 @@ static void publish_air_sample(void)
     if (pe != ERR_OK) {
         printf("[bringup] air mqtt_publish immediate rc=%d\n", (int)pe);
     }
-    printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u seq=%u\n",
-           s.aqi, s.co2_ppm, s.tvoc_ppb, q, (unsigned)s_air_seq);
+    printf("[bringup] air AQI=%u CO2=%u TVOC=%u q=%u status=0x%02X%s seq=%u\n",
+           s.aqi, s.co2_ppm, s.tvoc_ppb, q, s.status,
+           ens160_is_operating(s.status) ? "" : " [NOT RUNNING]",
+           (unsigned)s_air_seq);
 #if OLED_ON
     s_disp_co2  = s.co2_ppm;
     s_disp_tvoc = s.tvoc_ppb;
