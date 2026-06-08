@@ -21,7 +21,7 @@ Module.register("MMM-SensorUI", {
     this.respiratoryRateTL = "green";
 
     this.temperature = "...";
-    this.temperatureTL = "green";
+    this.temperatureTL = "yellow";
     this.humidity = "...";
     this.humidityTL = "green";
 
@@ -312,7 +312,39 @@ Module.register("MMM-SensorUI", {
     // return wrapper;
   // }, 
 
-  notificationReceived: function(notification, payload, sender) {
+//   notificationReceived: function(notification, payload, sender) {
+
+//       if (notification === "MQTT_SENSOR_UPDATE") {
+
+//           console.log("SensorUI received:", payload);
+
+//           // Example topic handling
+//           if (payload.topic === "sensors/heartrate") {
+//               this.heartRate = payload.message;
+//           }
+//           if (payload.topic === "sensors/respiratoryrate") {
+//               this.respiratoryRate = payload.message;
+//           }
+//           if (payload.topic === "sensors/temperature") {
+//               this.temperature = payload.message;
+//           }
+//           if (payload.topic === "sensors/humidity") {
+//               this.humidity = payload.message;
+//           }
+//           if (payload.topic === "sensors/airquality") {
+//               this.airQuality = payload.message;
+//           }
+//           if (payload.topic === "sensors/infomessage") {
+//               this.infoMessage = payload.message;
+//           }
+
+//           this.updateDom();
+//       }
+//   }
+
+// });
+
+notificationReceived: function(notification, payload, sender) {
 
       if (notification === "MQTT_SENSOR_UPDATE") {
 
