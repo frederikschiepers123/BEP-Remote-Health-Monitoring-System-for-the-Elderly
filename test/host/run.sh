@@ -17,7 +17,7 @@ OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 
 CMOCKA_INC="$PREFIX/include"; CMOCKA_LIB="$PREFIX/lib"
 if [ ! -f "$CMOCKA_INC/cmocka.h" ]; then
-    # fall back to system cmocka
+    # fall back to system cmocka (e.g. apt libcmocka-dev in CI)
     CMOCKA_INC="/usr/include"; CMOCKA_LIB=""
     [ -f /usr/include/cmocka.h ] || { echo "cmocka not found (install libcmocka-dev or build to ~/.local)"; exit 2; }
 fi
@@ -28,7 +28,12 @@ CFLAGS="-DHOST_TEST=1 -std=c11 -g -Wall
   -I$REPO/components/sensor_env -I$REPO/components/sensor_air
   -I$REPO/components/sensor_light -I$REPO/components/sensor_radar
   -I$CMOCKA_INC"
-LDFLAGS="-L$CMOCKA_LIB -Wl,-rpath,$CMOCKA_LIB -lcmocka -lm"
+# Only emit -L/-rpath for a non-system cmocka prefix.
+if [ -n "$CMOCKA_LIB" ]; then
+    LDFLAGS="-L$CMOCKA_LIB -Wl,-rpath,$CMOCKA_LIB -lcmocka -lm"
+else
+    LDFLAGS="-lcmocka -lm"
+fi
 STUBS="$HERE/stubs/host_stubs.c"
 
 # name : test.c : driver-sources (space-sep)

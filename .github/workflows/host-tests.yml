@@ -1,0 +1,27 @@
+# Host-native unit tests (CLAUDE.md §14.1) — run on every push / PR.
+# Self-contained: needs only gcc + cmocka. The driver "logic halves" compile
+# against the stub HAL in test/host/stubs/, so no pico-sdk, no ARM toolchain,
+# and no submodules are required.
+name: host-tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + CMocka
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libcmocka-dev
+
+      - name: Run host unit tests (gcc runner)
+        run: ./test/host/run.sh
+
+      - name: Run host unit tests (standalone CMake + ctest)
+        run: |
+          cmake -S test/host -B build-host
+          cmake --build build-host
+          ctest --test-dir build-host --output-on-failure
