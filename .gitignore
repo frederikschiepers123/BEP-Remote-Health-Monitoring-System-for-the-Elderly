@@ -1,0 +1,43 @@
+# Build artefacts
+build/
+*.elf
+*.uf2
+*.bin
+*.map
+*.lst
+*.d
+
+# Private keys, certificates, credentials — NEVER committed.
+# See docs/technical-audit.md §D.1 for why this matters.
+*.key
+*.pem
+*.der
+*.crt
+*.csr
+creds/
+certs/
+/cfg/
+# provisioning output (broker bundle + per-device bundles + mirror + operator)
+/out/
+# belt-and-braces if the project CA dir ever lands inside the repo
+/rmms-ca/
+
+# IDE / OS
+.vscode/settings.json
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Node.js — MagicMirror² + module deps
+node_modules/
+
+# Python (provisioning tooling)
+__pycache__/
+*.pyc
+.venv/
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
