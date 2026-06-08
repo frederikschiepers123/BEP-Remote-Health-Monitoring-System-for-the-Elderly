@@ -13,7 +13,7 @@
  * Reads /cfg/sensors.json and returns the matching radar_driver_t.
  *
  * For v1, the JSON file is treated as a plain ASCII string for simplicity
- * (either "bha2" or "c1001"), until a JSON parsing integration is added.
+ * (only "bha2" is supported), until a JSON parsing integration is added.
  * The string must match exactly (case-sensitive, no trailing whitespace).
  *
  * See CLAUDE.md §3.2 and §7.4 for design rationale.
@@ -46,12 +46,7 @@ radar_driver_t *radar_select_from_config(void)
         return radar_bha2_driver();
     }
 
-    if (strcmp((const char *)buf, "c1001") == 0) {
-        LOG_I("Radar driver selected: DFRobot C1001");
-        return radar_c1001_driver();
-    }
-
-    LOG_E("Unknown radar type in config: \"%s\" (expected \"bha2\" or \"c1001\")",
+    LOG_E("Unknown radar type in config: \"%s\" (expected \"bha2\")",
           (const char *)buf);
     return NULL;
 }

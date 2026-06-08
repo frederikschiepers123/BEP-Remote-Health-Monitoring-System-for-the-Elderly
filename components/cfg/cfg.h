@@ -6,7 +6,7 @@
  * Sourced from §11 canonical paths:
  *   /cfg/wifi.json      — {"_v":1,"ssid":"...","psk":"...","country":"NL"}
  *   /cfg/broker.json    — {"_v":1,"host":"tablet.local","ip":"...","port":8883}
- *   /cfg/sensors.json   — {"_v":1,"radar":"bha2"|"c1001"}
+ *   /cfg/sensors.json   — {"_v":1,"radar":"bha2"}
  *
  * All loaders return ERR_OK on success, ERR_NOT_FOUND if the file is absent
  * (device not yet provisioned), ERR_PARSE on malformed JSON, ERR_INVALID_ARG
@@ -36,8 +36,7 @@ typedef struct {
 /* Radar driver selection (CLAUDE.md §3.2 / §7.4). */
 typedef enum {
     CFG_RADAR_NONE  = 0,
-    CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz */
-    CFG_RADAR_C1001,    /* DFRobot C1001  — 24 GHz */
+    CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz (sole v1 radar) */
 } CfgRadarKind;
 
 /* Environmental-sensor selection. The PCB exposes a single I²C footprint

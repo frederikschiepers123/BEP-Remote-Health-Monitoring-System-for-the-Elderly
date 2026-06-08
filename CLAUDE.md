@@ -72,100 +72,78 @@ enrollment phase in this firmware — devices are born with their identity.
 
 ### 2.1 Transports
 
-> **v1 scope (current phase):** the **USB-CDC data link to the tablet is
-> deferred**. The firmware connects to the tablet broker **over Wi-Fi only** for
-> now; the USB-CDC transport, the tablet-side USB-MQTT bridge, and the
-> USB↔Wi-Fi failover FSM (§2.2) are a later-phase addition. The `transport_usb`
-> component and `tusb_config.h`'s 2-CDC layout remain in the tree but are not
-> wired into the active path yet. The end-state design below (USB primary,
-> Wi-Fi failover, uniform mTLS on both) is unchanged as the target; only the
-> *order of implementation* is. Developer logging in this phase uses a separate
-> USB-serial console (§12), which is **not** the tablet data link.
+> **v1 scope:** the **USB-CDC data link to the tablet is out of scope for v1**,
+> and its implementation has been **removed** (ADR-0002). Wi-Fi is the **sole
+> transport** — the firmware connects to the tablet broker over Wi-Fi (mTLS) on
+> lwIP's native `altcp_tls` + `pico_lwip_mqtt` path; there is no USB data link,
+> no tablet-side USB-MQTT bridge, and no transport failover. The former custom
+> `stream_t` stack (`transport_usb`/`stream_cdc`, `tls_context`, `mqtt_client`,
+> `transport_wifi`) and the USB↔Wi-Fi selector FSM were **deleted** from the
+> tree; their design is preserved in ADR-0002 for a possible post-v1 revival (a
+> new ADR, not a deferral). Developer logging uses a separate USB-serial console
+> (§12), which is **not** a tablet data link.
 
 | Path        | Use         | Encryption                                  | Notes                                                       |
 | ----------- | ----------- | ------------------------------------------- | ----------------------------------------------------------- |
-| **USB-CDC** | Primary *(target; deferred in v1)* | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Direct cable, MCU ↔ tablet, identical cert chain to Wi-Fi   |
-| **Wi-Fi**   | Failover *(sole transport in v1)* | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Same LAN as tablet                                          |
+| **Wi-Fi**   | Sole transport (v1) | mTLS, TLS 1.2/1.3, ECDSA P-256, static certs | Same LAN as tablet                                          |
+| **USB-CDC** | Out of scope (v1) — removed, see ADR-0002 | mTLS, ECDSA P-256, static certs (if revived) | Direct cable, MCU ↔ tablet — not built in v1 |
 
-**Encryption is uniform across both transports.** The MQTT client and the TLS
-context know nothing about which transport is carrying their bytes. There is
-exactly one cert path, one trust model, and one audit story: every byte that
-leaves the device is mTLS-encrypted, no exceptions.
+**Every byte that leaves the device is mTLS-encrypted, no exceptions.** There
+is exactly one cert path, one trust model, one audit story.
 
-The MCU runs an MQTT v3.1.1 client over **whichever stream is active**, with
-mbedTLS layered between MQTT and the stream:
+The MCU runs lwIP's MQTT v3.1.1 client over `altcp_tls` (mbedTLS) over lwIP TCP
+over CYW43 Wi-Fi:
 
 ```
-       ┌──────────────────────┐
-       │  MQTT v3.1.1 client  │
-       └──────────┬───────────┘
-                  │ plaintext MQTT bytes
-       ┌──────────▼───────────┐
-       │  mbedTLS context     │  ← static device cert, static project CA
-       └──────────┬───────────┘
-                  │ TLS records
-       ┌──────────▼───────────┐
-       │  stream_t (abstract) │
-       └────┬─────────────┬───┘
-            │             │
-   ┌────────▼───┐  ┌──────▼─────────────────┐
-   │ TinyUSB    │  │ lwIP TCP socket over   │
-   │ CDC0       │  │ CYW43 Wi-Fi            │
-   └────────────┘  └────────────────────────┘
+       ┌──────────────────────────┐
+       │  lwIP MQTT v3.1.1 client │   (pico_lwip_mqtt)
+       └───────────┬──────────────┘
+                   │ plaintext MQTT bytes
+       ┌───────────▼──────────────┐
+       │  altcp_tls (mbedTLS)     │   ← static device cert, static project CA
+       └───────────┬──────────────┘
+                   │ TLS records
+       ┌───────────▼──────────────┐
+       │  lwIP TCP                │
+       └───────────┬──────────────┘
+                   │
+       ┌───────────▼──────────────┐
+       │  CYW43 Wi-Fi             │
+       └──────────────────────────┘
 ```
 
-A **USB-MQTT bridge** runs on the tablet as a dumb byte pipe:
+The earlier dual-transport design layered MQTT/TLS over an abstract `stream_t`
+seam, so the same stack could run over USB-CDC or Wi-Fi (with a tablet-side
+USB-MQTT byte-pipe bridge for the USB path). USB-CDC was dropped and that
+abstraction removed (ADR-0002); the diagram above is the actual single path.
+
+### 2.2 Transport bring-up (no selection FSM in v1)
+
+With Wi-Fi the sole transport, there is nothing to select. `transport_task`
+(§7.1, `transport_mqtt`) brings up the one path and stays on it:
 
 ```
-/dev/ttyACM0  ◄──byte-for-byte──►  localhost:8883 (Mosquitto mTLS listener)
+   ┌────────────────────┐
+   │  BOOT              │  init peripherals
+   └─────────┬──────────┘
+             ▼
+   ┌────────────────────┐  associate Wi-Fi → resolve broker (mDNS/DNS) →
+   │  WIFI_ACTIVE       │  altcp_tls handshake → MQTT CONNECT → CONNACK →
+   │  (stay here)       │  publish; on link loss, reconnect with backoff
+   └────────────────────┘
 ```
 
-The bridge does **not** terminate TLS. It does not parse MQTT. It does not look
-at the bytes. It is a transparent stream proxy whose only job is to bridge the
-CDC character device into a loopback TCP socket. Mosquitto sees one mTLS
-connection from the bridge (with the device's client cert) and treats it
-identically to a connection arriving over Wi-Fi. **The firmware never knows
-which path it is on; Mosquitto never knows either.**
-
-### 2.2 Transport selection FSM
-
-```
-                     ┌────────────────────┐
-                     │  BOOT              │
-                     │  init peripherals  │
-                     └─────────┬──────────┘
-                               │
-                               ▼
-                     ┌────────────────────┐
-              ┌──────┤  USB_PROBE         │  Wait ≤ 8 s for:
-              │      │  1. CDC enumerated │   1. tud_cdc_connected()
-              │      │  2. TLS handshake  │   2. mbedTLS handshake over CDC
-              │      │  3. MQTT CONNACK   │   3. MQTT CONNACK from broker
-              │      └─────────┬──────────┘
-              │ any step fails │ all OK
-              ▼                ▼
-   ┌────────────────────┐ ┌────────────────────┐
-   │  WIFI_ACTIVE       │ │  USB_ACTIVE        │  preferred
-   │  TLS over TCP to   │ │  TLS over CDC to   │
-   │  tablet:8883       │ │  tablet:8883       │
-   │  (via Wi-Fi)       │ │  (via bridge)      │
-   └─────────┬──────────┘ └─────────┬──────────┘
-             │ link lost            │ USB unplug
-             │ + USB returns        │ + 3× missed keepalive
-             └──────────► swap ◄────┘
-```
-
-USB is **always preferred** when present. The 8-second probe budget covers TLS
-handshake (~80 ms typical, but allow for retries) plus MQTT CONNACK round-trip.
-On swap, the dormant transport keeps its mbedTLS session context warm for fast
-resumption via session tickets (RFC 5077).
+The earlier USB-CDC-primary / Wi-Fi-failover selection FSM (USB probe budget,
+swap policy, session-ticket resumption) was **removed** with the USB-CDC
+transport (ADR-0002). It is preserved in that ADR for a possible post-v1
+revival.
 
 ### 2.3 Component boundary
 
 The firmware owns:
 - Sensor sampling and per-sample QoS metadata.
 - MQTT publication of all sensor topics.
-- Transport selection and link health.
+- Wi-Fi link health and reconnect.
 - Local OLED UI (status pages).
 - Button/LED interaction.
 - Registration handshake (per parallel-team protocol — see §9.4).
@@ -193,32 +171,30 @@ The firmware does **not** own:
 | ---------------- | ---------------------- | ---- | ---------------------------------------------- |
 | Environment      | **AHT21** (default) **OR** Bosch BME280 | I²C0 | One I²C footprint, two populate options. AHT21 = temp + humidity (no pressure → `pres_hpa` emitted as `null` per §9.2.3). BME280 = temp + humidity + pressure. Selection via `/cfg/sensors.json` `"env"` field (`"aht21"` \| `"bme280"`); default `"bme280"` for back-compat with pre-AHT21 provisioned devices. AHT21 fixed addr `0x38`; BME280 `0x76` (SDO low) or `0x77`. |
 | Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BME280 `0x76/0x77` or AHT21 `0x38`). Compensation: whichever env driver is active feeds its last temp/hum into the ENS160 TEMP_IN / RH_IN registers every read cycle. |
-| mmWave radar (A) | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary protocol — `[0x01][SEQ][LEN][TYPE][~XOR hdr cksum]` header, see §3.2 framing note. |
-| mmWave radar (B) | **DFRobot C1001** (24 GHz, presence + vitals) | UART | 5 V mains, DFRobot AT-style command set |
+| mmWave radar     | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary protocol — `[0x01][SEQ][LEN][TYPE][~XOR hdr cksum]` header, see §3.2 framing note. |
 | Light            | **Rohm BH1750FVI** (advanced module, on MR60BHA2 breakout, I²C0 `0x23`) **OR** GL5516 LDR (generic module, ADC0/GPIO26 + 1 kΩ divider to GND) | I²C0 / ADC0 | Two product variants share the same PCB. Selection via `/cfg/sensors.json` `"light"` field (`"bh1750"` \| `"gl5516"`); default `"bh1750"`. BH1750 reports calibrated lux directly (16-bit raw / 1.2). GL5516 needs a per-board power-law calibration (`lux = (A / R_LDR)^(1/B)`, defaults `A=50000, B=0.7`). Both publish the same §9.2.2 payload `{"lux": ...}` on `rmms/<uuid>/light`. See ADR-0001 for the two-variant rationale. |
 | OLED             | 1.3″ 128×64 (**likely SH1106**) | I²C0 | Confirm controller before driver work |
 | Buttons          | 2× momentary           | GPIO | Internal pull-up, hardware debounce optional   |
 | LEDs             | Status indicators      | GPIO | Plus CYW43 onboard LED for net-state           |
 
-**Radar driver architecture:** Both radars are supported by separate drivers
-behind a common `radar_driver_t` v-table. Selection is by config flag at
-`/cfg/sensors.json` set during provisioning — *not* by runtime UART probing
-(probing is fragile on noisy UART lines and the two protocols share no magic
-bytes). See §7.4.
+**Radar driver architecture:** The MR60BHA2 is the sole radar in v1. It sits
+behind a `radar_driver_t` v-table (§7.4) so that a future radar is a new
+`radar_*.c` file plus one line in `radar_select.c` — no change to the task,
+topics, or payload schema. The v-table is the extensibility seam, not a
+runtime A/B switch: there is exactly one driver to select. (The DFRobot C1001,
+a 24 GHz alternative previously carried here, was removed from the project.)
 
-**Note on framing (bench-resolved):** The DFRobot C1001 uses Andar/AI-Thinker
-framing — `[0x53][0x59][con][cmd][len_H][len_L][payload][cksum][0x54][0x43]`
-at 115200 baud. **The Seeed MR60BHA2 does NOT share that framing.** Bring-up
-of the live module showed a different layout:
+**Note on framing (bench-resolved):** The Seeed MR60BHA2 does **not** use the
+Andar/AI-Thinker `0x53 0x59` / `0x54 0x43` framing. Bring-up of the live
+module showed this layout:
 
   `[0x01][SEQ_H][SEQ_L][LEN_H][LEN_L][TYPE_H][TYPE_L][HDR_CKSUM]`
   ` ── payload (LEN bytes) ── [DATA_CKSUM]`
 
 with `~XOR` checksums over the 7-byte pre-checksum header and over the
-payload respectively. The drivers therefore stay independent (no shared
-`radar_andar_frame.c`); each one parses its own protocol. The
-`radar_driver_t` v-table (§7.4) is still the right abstraction — it just
-sits one layer above the framing, on the parsed `RadarSample`.
+payload respectively. The driver parses this protocol directly; the
+`radar_driver_t` v-table (§7.4) sits one layer above the framing, on the
+parsed `RadarSample`.
 
 ### 3.3 Power
 - **5 V mains → MCU; MCU 3V3 rail powers BME280, OLED, LDR, buttons, LEDs, IR camera.**
@@ -313,21 +289,17 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   │   │                         #   temp/hum for TEMP_IN/RH_IN compensation)
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
 │   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (Seeed framing)
-│   │   ├── radar_c1001.c         # DFRobot C1001 driver (Andar framing)
-│   │   └── radar_select.c        # Reads /cfg/sensors.json, instantiates one
+│   │   └── radar_select.c        # Reads /cfg/sensors.json, returns the driver
 │   ├── sensor_light/             # BH1750 (I²C lux) driver + light_task
 │   ├── cfg/                      # /cfg/{wifi,broker,sensors}.json loaders
+│   ├── i2c_bus/                  # shared I²C0 bus init + mutex (§7.2)
 │   ├── ui_oled/                  # SH1122 driver + 4-page UI state machine
 │   ├── ui_input/                 # buttons + LEDs
-│   ├── transport_usb/            # TinyUSB CDC, stream wrapper
-│   ├── transport_wifi/           # CYW43 init, lwIP, DHCP, mDNS resolver
-│   ├── transport_selector/       # FSM from §2.2
-│   ├── mqtt_client/              # MQTT v3.1.1 over an abstract stream
-│   ├── tls_context/              # mbedTLS ECDSA P-256 setup for Wi-Fi path
+│   ├── transport_mqtt/           # transport_task: Wi-Fi → lwIP altcp_tls → MQTT
 │   ├── identity/                 # loads cert+key from littlefs, exposes UUID
 │   ├── storage/                  # littlefs mount + KV API
 │   ├── json/                     # snprintf encoders + jsmn-style tokenizer
-│   └── log/                      # tagged logging over CDC1
+│   └── log/                      # tagged logging over USB-serial console (§12)
 │
 ├── third_party/
 │   ├── pico-sdk/                 # submodule
@@ -365,11 +337,12 @@ FreeRTOS SMP, both M33 cores enabled, tickless idle off (we are always mains-pow
 | `radar_task`      | Core 1        | 4        | 4 KB   | UART RX, frame parsing               |
 | `light_task`      | Any           | 3        | 1 KB   | BH1750 I²C read at 0.2 Hz (continuous H-res; lux barely moves at 1 Hz) |
 | `ui_task`         | Core 0        | 2        | 4 KB   | OLED redraw on button or 1 Hz        |
-| `transport_task`  | Core 0        | 5        | 6 KB   | Owns the active stream + MQTT client |
-| `selector_task`   | Core 0        | 6        | 2 KB   | Transport FSM, highest priority      |
+| `transport_task`  | Core 0        | 5        | 6 KB   | Wi-Fi + altcp_tls + lwIP MQTT (`transport_mqtt`); sole consumer of the producer queues |
 
-Priorities: higher numeric = higher priority. The transport selector outranks
-everything because losing the link is the only failure mode that matters.
+Priorities: higher numeric = higher priority. `transport_task` is the highest-
+priority worker because losing the link is the only failure mode that matters.
+(The separate `selector_task` is gone — there is no transport FSM in v1; see
+§2.2 and ADR-0002.)
 
 ### 7.2 IPC
 - One **FreeRTOS queue per producer→transport edge**, named `q_env`, `q_air`,
@@ -390,7 +363,7 @@ typedef struct {
     err_t (*init)(void *ctx, uart_inst_t *uart);
     err_t (*read_sample)(void *ctx, radar_sample_t *out, uint32_t timeout_ms);
     err_t (*close)(void *ctx);
-    const char *name;          // "MR60BHA2" or "C1001"
+    const char *name;          // e.g. "MR60BHA2"
     void *ctx;
 } radar_driver_t;
 
@@ -398,38 +371,36 @@ radar_driver_t *radar_select_from_config(void);   // reads /cfg/sensors.json
 ```
 
 The `radar_task` calls `read_sample()` in a loop and is **completely unaware**
-of which radar is attached. New radars in the future require a new
-`radar_*.c` file and a new entry in `radar_select.c`. They do **not** require
-changes to the task, to MQTT topics, or to the payload schema.
+of which radar is attached. A future radar requires a new `radar_*.c` file and
+a new entry in `radar_select.c`. It does **not** require changes to the task,
+to MQTT topics, or to the payload schema. (v1 ships a single driver, the
+MR60BHA2; the v-table is kept as the extensibility seam.)
 
-`radar_sample_t` is the lowest-common-denominator of what both radars produce:
-presence (bool), distance (mm, nullable), breath rate (BPM, nullable),
-heart rate (BPM, nullable). Quality flag (`q` in §9.2) is set by the driver
-when the radar reports an obvious garbage value — including the C1001 "ghost
-reading" case the previous group documented.
+`radar_sample_t` is the lowest-common-denominator a radar produces: presence
+(bool), distance (mm, nullable), breath rate (BPM, nullable), heart rate (BPM,
+nullable). Quality flag (`q` in §9.2) is set by the driver when the radar
+reports an obvious garbage value (e.g. a presence-without-vitals "ghost
+reading").
 
 ---
 
 ## 8. Transport layer details
 
-### 8.1 USB-CDC (primary)
-- TinyUSB configured for **two CDC interfaces**:
-  - **CDC0** → mTLS-encrypted MQTT byte stream (binary, no line discipline,
-    no echo, no character translation).
-  - **CDC1** → stdio for logs (`log` component writes here; line-buffered).
-- Mandatory in `tusb_config.h`: `CFG_TUD_CDC = 2`, `CFG_TUD_CDC_RX_BUFSIZE ≥ 512`,
-  `CFG_TUD_CDC_TX_BUFSIZE ≥ 1024`.
-- The TLS stack (mbedTLS) sits **above** CDC0 via custom send/recv callbacks
-  installed with `mbedtls_ssl_set_bio`. These callbacks read/write the
-  TinyUSB CDC ring buffers. TLS records may span multiple USB transfers; the
-  callbacks handle short reads by returning `MBEDTLS_ERR_SSL_WANT_READ`.
-- On USB suspend, MQTT client tears down cleanly (DISCONNECT packet best-effort,
-  then `mbedtls_ssl_close_notify`) and the selector swings to Wi-Fi.
+### 8.1 USB-CDC (removed from v1 — see ADR-0002)
+USB-CDC is **out of scope for v1** and its implementation has been **removed**
+from the tree: the `transport_usb` / `stream_cdc` backend, the custom `stream_t`
+TLS stack (`tls_context` + `mqtt_client`), and the `transport_selector` FSM are
+deleted. Wi-Fi is the sole transport (§8.2). The original 2-CDC design (CDC0 =
+mTLS MQTT byte stream over TinyUSB with mbedTLS BIO callbacks on the CDC ring
+buffers, CDC1 = logs) and the USB↔Wi-Fi failover model are preserved in
+**ADR-0002** for a potential post-v1 revival — reviving USB-CDC is a new ADR,
+not a deferral. (Developer logging still uses a standalone USB-serial console,
+`pico_stdio_usb`, which is **not** a tablet data link — §12.)
 
-### 8.2 Wi-Fi (failover)
+### 8.2 Wi-Fi (sole transport)
 - `cyw43_arch_init_with_country(CYW43_COUNTRY_NETHERLANDS)`.
-- Credentials in littlefs at `/cfg/wifi.json`. Provisioned at factory or over
-  USB-CDC at first boot — no SoftAP, no captive portal.
+- Credentials in littlefs at `/cfg/wifi.json`. Provisioned at factory via the
+  provisioning tool / picotool — no SoftAP, no captive portal.
 - Broker address resolution:
   1. `/cfg/broker.json` `ip` field, if present and parseable → use directly.
   2. `/cfg/broker.json` `host` field → resolved via lwIP `dns_gethostbyname`.
@@ -460,35 +431,31 @@ reading" case the previous group documented.
   The previous group's UDP-broadcast discovery scheme is dead and **must not
   be reintroduced**. If mDNS is unavailable on a given LAN, the fallback is to
   re-provision `/cfg/broker.json` with a literal `ip`.
-- TLS stack: **identical** to the USB-CDC path — same mbedTLS configuration,
-  same cert chain, same cipher suites. The only difference is the underlying
-  `stream_t` backend (lwIP TCP instead of TinyUSB CDC).
+- TLS stack: lwIP's **`altcp_tls`** (mbedTLS) with the static cert chain and
+  restricted cipher suites (§10.2), layered under lwIP's MQTT client. There is
+  no custom `stream_t` / BIO shim — the firmware uses the pico-sdk-native
+  `altcp_tls` + `pico_lwip_mqtt` path proven on hardware (ADR-0002).
 - Reconnect: exponential backoff 1 s → 32 s, then 32 s constant. Do not flood
   the broker on outage.
 
 ### 8.3 MQTT client
-- Implement against an **abstract `stream_t` interface**, not against TLS or USB
-  directly. The MQTT client speaks to mbedTLS, mbedTLS speaks to `stream_t`,
-  `stream_t` is backed by either CDC0 or a TCP socket:
-
-  ```c
-  typedef struct {
-      int  (*read)(void *ctx, uint8_t *buf, size_t len, uint32_t timeout_ms);
-      int  (*write)(void *ctx, const uint8_t *buf, size_t len);
-      void (*close)(void *ctx);
-      void *ctx;
-  } stream_t;
-  ```
-
-- Two `stream_t` implementations: `stream_cdc.c` (TinyUSB CDC0) and
-  `stream_tcp.c` (lwIP TCP socket). Both expose identical semantics.
-- One `tls_context.c` wraps mbedTLS with the static cert chain. It accepts a
-  `stream_t *` as its byte transport. Adding a future transport means writing
-  one new `stream_t`, nothing else.
+- The firmware uses lwIP's built-in MQTT v3.1.1 client (`pico_lwip_mqtt`,
+  `lwip/apps/mqtt.h`) over `altcp_tls` (mbedTLS) — **not** a custom MQTT/TLS
+  stack. The single `transport_mqtt` component (`transport_task`, §7.1) owns
+  the whole path: CYW43 Wi-Fi → lwIP TCP → `altcp_tls` → lwIP MQTT, and is the
+  sole consumer of the producer queues (`q_env`, `q_air`, `q_radar`, `q_light`).
+- This replaced an earlier design built around an abstract `stream_t` seam
+  (`stream_cdc` / `stream_tcp` backends + a custom `tls_context.c` +
+  `mqtt_client.c`) meant to carry one MQTT/TLS stack over either USB-CDC or
+  Wi-Fi. With USB-CDC dropped (ADR-0002) that abstraction had a single backend,
+  so it was deleted in favour of the hardware-proven lwIP-native path. The
+  `stream_t` design is retained in ADR-0002 should a second transport return.
+- All lwIP calls run under `cyw43_arch_lwip_begin/end` (TCP/IP core lock), safe
+  under `sys_freertos` because `LWIP_TCPIP_CORE_LOCKING` is enabled.
 - QoS 1 for vitals; QoS 0 acceptable for the OLED-debug heartbeat topic.
-- Keepalive 30 s on USB, 60 s on Wi-Fi.
-- Last-Will-and-Testament on `device/<uuid>/status` with payload `"offline"`,
-  retained.
+- Keepalive 60 s on Wi-Fi.
+- Last-Will-and-Testament on `rmms/<uuid>/status` with payload `"offline"`
+  (retained, QoS 1); `"online"` published retained on each CONNACK.
 
 ---
 
@@ -680,7 +647,7 @@ group's enroll/verify dance is dropped. Identity comes from the cert.
 
 **At boot:**
 1. Firmware loads cert and key from littlefs.
-2. Opens mTLS connection to broker (USB-CDC primary, Wi-Fi failover).
+2. Opens mTLS connection to broker over Wi-Fi (the sole v1 transport).
 3. Sends MQTT CONNECT with `client_id = <uuid>`.
 4. Broker validates the client cert against the project CA, reads CN from the
    cert, enforces `client_id == CN`.
@@ -939,17 +906,19 @@ system, not only the MCU.
     eventually, by the Radxa relay) to publish the downlink topics `info` and
     `screen`. Mosquitto ACL: `topic write rmms/+/info`, `topic write rmms/+/screen`,
     nothing else.
-- The same cert chain is presented on both USB-CDC and Wi-Fi paths. Mosquitto
-  validates the device cert against the project CA. The device validates the
-  Mosquitto server cert against the same CA (mutual auth, same trust anchor).
+- The cert chain is presented on the Wi-Fi path (and on USB-CDC too, if it is
+  revived post-v1). Mosquitto validates the device cert against the project CA.
+  The device validates the Mosquitto server cert against the same CA (mutual
+  auth, same trust anchor).
 - **CA private key never touches a deployed device or a developer laptop.** It
   lives on a single offline provisioning workstation. Compromise of that
   workstation invalidates the entire fleet.
 
 ### 10.3 Session lifecycle
-- TLS session tickets (RFC 5077) are enabled. On transport switch (USB ⇄ Wi-Fi)
-  the dormant context retains its ticket for fast resumption (~10 ms vs ~80 ms
-  full handshake).
+- TLS session tickets (RFC 5077) are supported by mbedTLS. With a single
+  transport there is no USB⇄Wi-Fi swap to resume across — that was their
+  original purpose (ADR-0002) — so they now only speed a dropped-Wi-Fi
+  reconnect (~10 ms vs ~80 ms full handshake).
 - mbedTLS configured with `MBEDTLS_SSL_RENEGOTIATION` **disabled**. Sessions
   are torn down and re-established rather than renegotiated.
 
@@ -1060,13 +1029,12 @@ to change a device's identity.
 
 - `components/log` exposes `LOG_E / LOG_W / LOG_I / LOG_D / LOG_V` macros and a
   per-module tag.
-- **Target:** output routed to **CDC1**, not CDC0 (CDC0 is data only).
-  **v1 (current phase, USB tablet link deferred — §2.1):** logs go to a
-  standalone **USB-serial dev console** (`pico_stdio_usb`) that enumerates as a
-  plain COM port on the developer's PC. This is a debug aid only, separate from
-  the tablet data path; when the 2-CDC USB tablet link lands, logging moves to
-  CDC1 per the target design. A bring-up validation of this console lives at
-  `test/bringup/usb_console.c`.
+- **Target:** in v1, logs go to a standalone **USB-serial dev console**
+  (`pico_stdio_usb`) that enumerates as a plain COM port on the developer's PC.
+  This is a debug aid only and is **not** a tablet data link (there is no
+  USB-CDC data path in v1 — §2.1). If the 2-CDC USB-CDC transport is revived
+  post-v1, logging would move to CDC1 (CDC0 = data only). A bring-up validation
+  of this console lives at `test/bringup/usb_console.c`.
 - Compile-time `LOG_LEVEL` filter. Default `LOG_LEVEL_INFO` for release,
   `LOG_LEVEL_DEBUG` for dev.
 - Critical errors also publish a single line to `rmms/<uuid>/log` (QoS 0,
@@ -1151,22 +1119,24 @@ production:
 - CI runs host tests on every push.
 
 ### 14.2 Hardware-in-the-loop
-- A scripted bring-up harness drives:
-  - USB enumeration → TLS handshake → MQTT CONNACK timing.
-  - Wi-Fi failover within 5 s of USB unplug (including TLS handshake on Wi-Fi).
-  - mTLS handshake on first connection of each transport.
-  - Session ticket resumption on transport swap (<20 ms).
+- A scripted bring-up harness drives (v1 = Wi-Fi only):
+  - Wi-Fi associate → mTLS handshake → MQTT CONNACK timing.
+  - Reconnect within the backoff window after a Wi-Fi link drop (including a
+    fresh TLS handshake).
   - Sample rate verification per sensor (env 1 Hz, radar at native rate,
     light 1 Hz).
+  - *(Post-v1, if USB-CDC is revived:* USB enumeration timing, USB↔Wi-Fi
+    failover within 5 s of unplug, and session-ticket resumption on transport
+    swap <20 ms — see §2.2.*)*
 - Targets to beat (relative to the previous group's plaintext-MQTT baseline,
   with TLS overhead budgeted in):
-  - First-connect handshake (TLS + MQTT CONNECT/CONNACK): **< 500 ms** on USB,
-    **< 1 s** on Wi-Fi.
+  - First-connect handshake (TLS + MQTT CONNECT/CONNACK): **< 1 s** on Wi-Fi.
   - Steady-state sense-to-broker latency: **< 1 s** (same as previous baseline —
     TLS only adds handshake cost, not per-message cost).
-  - MQTT publish round-trip (post-handshake): **< 150 ms** on USB, **< 250 ms**
-    on Wi-Fi.
+  - MQTT publish round-trip (post-handshake): **< 250 ms** on Wi-Fi.
   - Sustained throughput: **≥ 700 B/s** without backpressure.
+  - *(Post-v1 USB-CDC targets, if revived: < 500 ms first-connect, < 150 ms
+    publish round-trip.)*
 
 The TLS handshake budget is one-time per connection, not per message. If your
 steady-state latency is significantly worse than the MicroPython baseline,
@@ -1184,7 +1154,8 @@ Do not skip ahead. Each step assumes the previous works.
 
 1. **Blink** — bare metal, no FreeRTOS. Verify toolchain, BOOTSEL flash, SWD.
 2. **FreeRTOS hello** — one task, blinks at 1 Hz. Verify SMP boot.
-3. **CDC1 logs** — `LOG_I` over CDC1, viewable in minicom.
+3. **Dev-console logs** — `LOG_I` over the standalone USB-serial dev console
+   (`pico_stdio_usb`, §12), viewable in minicom.
 4. **littlefs mount** — read-modify-write a counter at `/state/boot_count.json`.
 5. **Env (AHT21 or BME280)** — env_task driving the env_driver_t v-table,
    selected via `/cfg/sensors.json` `"env"` field (default AHT21 on the
@@ -1200,29 +1171,25 @@ Do not skip ahead. Each step assumes the previous works.
 5c. **BH1750** — light_task publishing JSON samples (`{"lux": ...}`) at
    ~0.2 Hz. Continuous H-resolution mode (~120 ms per measurement);
    driver-side init does power-on + mode + initial 180 ms wait.
-6. **mbedTLS + stream_cdc** — TLS handshake over CDC0 against a host-side
-   `openssl s_server` configured with the project CA. This validates the cert
-   chain and the BIO callbacks before any MQTT code.
-7. **MQTT over TLS over CDC0** — connect to a host-side mosquitto via the byte
-   bridge; verify CONNACK and a first PUBLISH.
-8. **OLED** — page 1 (status) and page 2 (last env sample). Buttons cycle.
-9. **mmWave radar driver A (MR60BHA2)** — implement Seeed binary protocol,
-   verify presence + breath + heart rate samples.
-10. **mmWave radar driver B (C1001)** — implement DFRobot AT protocol, verify
-    same sample fields. Both drivers must produce identical `radar_sample_t`.
-11. **Radar selection** — `/cfg/sensors.json` flag swaps drivers without rebuild.
-12. **Light sensor** — ADC sampling, publish to CDC0 + MQTT.
-13. **CYW43 + lwIP** — DHCP, ping, mDNS resolve of `_mqtt._tcp.local`.
-14. **mbedTLS over TCP** — TLS handshake to Mosquitto via Wi-Fi. Reuse the
-    exact mbedTLS config from step 6.
-15. **Transport selector FSM** — full failover and recovery cycle, including
-    session ticket resumption.
-16. **End-to-end identity check** — boot firmware against the real tablet
+6. **OLED** — page 1 (status) and page 2 (last env sample). Buttons cycle.
+7. **mmWave radar (MR60BHA2)** — implement the Seeed binary protocol behind
+   the `radar_driver_t` v-table; verify presence + breath + heart rate
+   samples decode into `radar_sample_t`.
+8. **Light sensor (GL5516 LDR variant)** — ADC sampling + power-law
+   calibration, publish via MQTT.
+9. **CYW43 + lwIP** — DHCP, ping, mDNS resolve of `tablet.local`.
+10. **mbedTLS over TCP** — TLS handshake to Mosquitto via Wi-Fi. This is the
+    first TLS bring-up; it establishes the single mbedTLS config (static cert
+    chain, restricted cipher suites — §10.2) that the rest of the stack uses.
+11. **Wi-Fi transport (`transport_task`)** — `transport_mqtt` brings up Wi-Fi →
+    `altcp_tls` → lwIP MQTT, gets CONNACK, and reconnects with backoff on link
+    loss. No transport FSM in v1 (§2.2).
+12. **End-to-end identity check** — boot firmware against the real tablet
     Mosquitto with the production ACL pattern. Verify client cert is accepted,
     client_id matches CN, and only `rmms/<uuid>/#` writes are permitted.
     No handshake protocol to test — just TLS + MQTT CONNECT + a publish + a
     subscribe.
-17. **48-hour soak.**
+13. **48-hour soak.**
 
 ---
 
@@ -1237,12 +1204,12 @@ Resolve each, then strip the TODO.
 2. ~~**Radar framing parity.**~~ **Resolved.** Bench bring-up of a live
    MR60BHA2 confirmed it does NOT use Andar `0x53 0x59` / `0x54 0x43` framing.
    It uses its own 8-byte SOF-`0x01` header with `~XOR` checksums; see §3.2.
-   The two drivers stay fully separate; no shared framing helper.
-3. **Tablet bridge ownership.** Who writes the `/dev/ttyACMx ↔ localhost:8883`
-   transparent byte pipe on the tablet? Not this repo, but it blocks
-   integration testing. Likely a small Python or Go service in the tablet repo.
-   Needs to handle Android USB host permissions (`UsbManager.requestPermission`),
-   Termux USB plugin, and Termux:Boot for auto-start.
+   (Moot now that the C1001 has been removed — the MR60BHA2 is the only radar.)
+3. ~~**Tablet bridge ownership.**~~ **Moot for v1.** The `/dev/ttyACMx ↔
+   localhost:8883` byte pipe only exists for the USB-CDC transport, which is
+   out of scope for v1 (§2.1). If USB-CDC is revived post-v1, the bridge (a
+   small tablet-side service handling Android USB permissions, the Termux USB
+   plugin, and Termux:Boot auto-start) becomes a live question again.
 4. ~~**MagicMirror² run mode.**~~ **Resolved.** Termux + Node.js running
    `npm run server` (server-only mode, no Electron) on :8080; Chrome on the
    tablet opens `http://localhost:8080` for the viewer. Auto-start via
@@ -1281,12 +1248,21 @@ Resolve each, then strip the TODO.
    publish blocked, operator writes only info/screen (not env), device reads
    only its own /cmd, cross-device read blocked, and connections without a
    client cert refused (`require_certificate true`). 7/7 assertions pass
-   against the live tablet broker. This is bring-up step 16.
+   against the live tablet broker. This is bring-up step 12.
 
 **Resolved since last revision:**
-- mmWave radar choice: dual support for Seeed MR60BHA2 and DFRobot C1001 via
-  the `radar_driver_t` interface, with selection via `/cfg/sensors.json`.
-- TLS scope: mTLS on both transports (USB-CDC and Wi-Fi), static cert chain.
+- **USB-CDC transport dropped from v1 (ADR-0002):** Wi-Fi is the sole
+  transport, on the lwIP-native `altcp_tls` + `pico_lwip_mqtt` path. The
+  USB-CDC-era custom `stream_t` stack (`transport_usb`, `transport_selector`,
+  `tls_context`, `mqtt_client`, `transport_wifi`) was **deleted**; its design
+  lives in ADR-0002. Reviving USB-CDC is a post-v1 ADR (§2.1, §2.2, §8.1, §17).
+- **DFRobot C1001 radar removed from the project:** v1 ships only the
+  MR60BHA2. The `radar_driver_t` v-table is retained for a future radar
+  (§3.2, §7.4).
+- mmWave radar: Seeed MR60BHA2 only, behind the `radar_driver_t` v-table
+  (kept as the extensibility seam for a future radar).
+- TLS scope: mTLS over Wi-Fi (the sole v1 transport), static cert chain. The
+  USB-CDC transport (and its mTLS) is out of scope for v1 (§2.1).
 - Face recognition: descoped from v1 entirely (see §17).
 - **IR camera: dropped entirely from v1.** No SPI sensor remains.
 - **Registration protocol:** dropped wholesale (audit findings + decision to
@@ -1332,6 +1308,9 @@ State these explicitly so reviewers stop asking:
 - Encrypted OTA.
 - On-device cert rotation, on-device CSR generation, on-device CA hosting.
 - HTTPS, REST, or any non-MQTT protocol on the device side.
+- **USB-CDC tablet transport** — out of scope for v1, and the implementation
+  was **removed** (ADR-0002). Wi-Fi is the sole transport (§2.1, §2.2, §8.1);
+  the custom `stream_t` stack is deleted. Reviving USB-CDC is a post-v1 ADR.
 
 ---
 
@@ -1341,7 +1320,7 @@ State these explicitly so reviewers stop asking:
   **Authoritative on what not to do.** Section D enumerates concrete defects;
   this firmware is constructed to defeat each one.
 - `docs/BAP_report_PCB_.pdf` — previous group's PCB + firmware thesis.
-  Behavioural reference for sensor protocols (BME280, C1001, HMMD) and the
+  Behavioural reference for sensor protocols (BME280, HMMD) and the
   4-page OLED UI concept. **Not authoritative on registration, security, or
   architecture.**
 - `docs/BAP_Protocol_Thesis2.pdf` — parallel team's QR-code / camera-LED
@@ -1378,9 +1357,10 @@ When working in this repository:
 - **Do not stub or fake security primitives.** If a TLS feature is missing,
   surface it; do not write a no-op. The audit shows the previous group did
   exactly this (`sig = nonce`) — do not repeat it.
-- **Do not introduce code paths that bypass TLS.** mTLS is uniform on both
-  transports. There is no "USB is local, skip TLS" optimization — that
-  shortcut was rejected. If you find yourself wanting to skip TLS for
+- **Do not introduce code paths that bypass TLS.** Every byte off the device
+  is mTLS-encrypted. There is no "it's local, skip TLS" optimization — that
+  shortcut was rejected (it was originally aimed at the USB-CDC path, which is
+  itself out of scope for v1). If you find yourself wanting to skip TLS for
   performance, profile first; the steady-state cost is negligible.
 - **Do not add an on-device cert/key generation path.** Certs are static and
   factory-provisioned (§10.2). On-device keygen is an explicit non-goal.
@@ -1391,8 +1371,6 @@ When working in this repository:
 - **Do not reintroduce UDP broker discovery.** mDNS or static config only (§8.2).
 - **Treat the previous group's MicroPython code as a spec, not a source.** Do
   not translate line by line.
-- **Treat both radar drivers as peers.** Do not optimize for one and treat the
-  other as a stub. Both must produce identical `radar_sample_t` payloads.
 - **Prefer deleting code to adding it.** This repo grows slowly on purpose.
 - When asked to "make it work", first answer: does it match the architecture
   in §2? If not, the answer is no.
@@ -1413,7 +1391,7 @@ the previous codebase. Each maps to a C-equivalent prohibition for this repo:
 | Busy-wait spins on flags set by other threads (`while not connected: pass`) | Cross-task synchronization uses FreeRTOS primitives (semaphore, queue, event group). Spinning on a shared variable is a code review reject. |
 | `asyncio.sleep_ms(150)` called without `await` (delay silently skipped) | C has no equivalent, but: any call that schedules work must have its return value checked. Function signatures encode whether they're synchronous. |
 | Bootstrap creds hardcoded (`new_dev` / `new123`) | All credentials live in `/cfg/` or `/certs/` in littlefs, populated at provisioning. Source contains no credential strings, not even as defaults. |
-| TLS SNI hardcoded to wrong value (`"server"`) with a stale comment to fix it | SNI is set from the broker hostname in `/cfg/broker.json`. No string literal for SNI anywhere in `tls_context.c`. |
+| TLS SNI hardcoded to wrong value (`"server"`) with a stale comment to fix it | SNI is set from the broker hostname in `/cfg/broker.json`. No string literal for SNI anywhere in the transport (`transport_mqtt.c` / `altcp_tls` config). |
 | Unencrypted CA / device keys committed to repo | `.gitignore` blocks `*.key`, `*.pem`, `*.der`, `*.crt`, `creds/`, `certs/`. Pre-commit hook scans for ASN.1 / PEM headers. |
 | BME280 stale-read bug (reads return previous ADC if measurement not re-triggered) | All sensor `read_sample` calls are self-contained: they trigger, wait, and read in one call. No "must call this other function first" preconditions in the driver API. |
 | `light_cfg` parameter accepted but never stored as `self.light_cfg` | Constructor/init functions store every parameter or document explicitly why they don't. `-Wunused-parameter -Werror`. |

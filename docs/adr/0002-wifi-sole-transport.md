@@ -3,6 +3,13 @@
 **Status:** Accepted
 **Date:** 2026-06-08
 
+> **Update 2026-06-08:** the dead custom `stream_t` stack this ADR left
+> "dormant in the tree" has now been **deleted** — components `transport_usb`,
+> `transport_selector`, `transport_wifi`, `tls_context`, and `mqtt_client`
+> (with the `stream_cdc` / `stream_tcp` backends) are gone, along with their
+> CMake wiring. The firmware is unchanged (it never linked them). This ADR
+> remains the record of the removed design for any future USB-CDC revival.
+
 ## Context
 
 CLAUDE.md §2.1/§2.2 originally specified a **dual transport**: USB-CDC as the
@@ -41,9 +48,10 @@ The `stream_t` abstraction's whole reason to exist — *one* TLS/MQTT stack over
   the sensor producer queues.
 - The USB-CDC transport, the tablet-side USB-MQTT bridge, and the USB↔Wi-Fi
   selection FSM are **not built**. The `transport_usb`, `transport_selector`,
-  `tls_context`, and `mqtt_client` components, plus the `stream_cdc` backend,
-  remain in the tree but are **dormant** — no longer linked into
-  `sensor_module`.
+  `transport_wifi`, `tls_context`, and `mqtt_client` components (the whole
+  custom `stream_t` stack, incl. the `stream_cdc` / `stream_tcp` backends) have
+  been **deleted** from the tree — see the *Update* above. Their design is
+  recorded in this ADR for recovery.
 - Developer logging uses a standalone USB-serial console (`pico_stdio_usb`,
   §12), which is a debug aid, **not** a tablet data link.
 
@@ -63,9 +71,10 @@ This is recorded in CLAUDE.md §2.1/§2.2/§8.1/§8.2/§8.3/§9.4/§10/§12/§17
 - No transport redundancy: if Wi-Fi drops, the device cannot publish until it
   reassociates. Mitigated by an in-RAM retry path and reconnect-with-backoff;
   the LWT marks the device offline so consumers notice within keepalive×1.5.
-- Dead code: ~1,500 lines of the custom `stream_t` stack are now unused. Kept
-  (not deleted) so the USB design is recoverable, but they are a maintenance
-  smell. A follow-up may delete them once USB is firmly ruled out for good.
+- ~1,500 lines of the custom `stream_t` stack became dead code. **Resolved**
+  by deleting them (see the *Update* above); the design is preserved in this
+  ADR, so removing the code costs nothing if USB never returns and is fully
+  recoverable from the ADR if it does.
 
 ## Reviving USB-CDC later
 

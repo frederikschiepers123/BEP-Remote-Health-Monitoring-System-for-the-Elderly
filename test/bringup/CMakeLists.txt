@@ -2,9 +2,9 @@
 # Each is an independent .uf2 you flash to validate one layer of the stack.
 # Enabled with -DBUILD_BRINGUP=ON; not part of the normal firmware build.
 
-# tusb_config.h now lives in components/transport_usb (not the repo root), so it
-# no longer shadows pico_stdio_usb's own tusb_config.h. These programs can safely
-# inherit the global include path (lwipopts.h / mbedtls_config.h) from the root.
+# There is no custom tusb_config.h in the tree (the USB-CDC stack was removed —
+# ADR-0002), so pico_stdio_usb uses its own. These programs safely inherit the
+# global include path (lwipopts.h / mbedtls_config.h) from the repo root.
 
 # Step 1 — bare-metal blink (no FreeRTOS). Validates toolchain + flash + boot.
 add_executable(bringup_blink blink.c)

@@ -57,15 +57,10 @@ add_subdirectory(components/json)
 add_subdirectory(components/identity)
 add_subdirectory(components/cfg)
 add_subdirectory(components/i2c_bus)
-# transport_usb / transport_wifi / transport_selector / tls_context /
-# mqtt_client implement the USB-CDC-era custom stream_t stack.  v1 dropped
-# USB-CDC (ADR-0002) and the firmware no longer links them; kept building so
-# the tree stays consistent until they are removed.
-add_subdirectory(components/transport_usb)
-add_subdirectory(components/transport_wifi)
-add_subdirectory(components/transport_selector)
-add_subdirectory(components/tls_context)
-add_subdirectory(components/mqtt_client)
+# v1 transport: Wi-Fi-only, on the lwIP-native altcp_tls + pico_lwip_mqtt path
+# (ADR-0002).  The USB-CDC-era custom stream_t stack (transport_usb,
+# transport_wifi, transport_selector, tls_context, mqtt_client) was deleted —
+# see ADR-0002 for the removed design and the USB-revival path.
 add_subdirectory(components/sensor_env)
 add_subdirectory(components/sensor_air)
 add_subdirectory(components/sensor_radar)
@@ -85,8 +80,6 @@ add_subdirectory(main)
 # (header-only) and has nothing to compile.
 foreach(_tgt
     log storage json identity
-    transport_usb transport_wifi transport_selector
-    tls_context mqtt_client
     sensor_env sensor_air sensor_radar sensor_light
     ui_oled ui_input
     sensor_module)

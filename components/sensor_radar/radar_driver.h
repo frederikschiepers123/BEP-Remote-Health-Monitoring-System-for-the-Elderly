@@ -3,12 +3,11 @@
 
 /* Abstract radar driver interface.
  *
- * Both the Seeed MR60BHA2 (60 GHz) and DFRobot C1001 (24 GHz) are supported
- * behind this common vtable.  Selection is by config flag in /cfg/sensors.json
- * — not by runtime UART probing.
+ * v1 ships a single radar, the Seeed MR60BHA2 (60 GHz), behind this common
+ * vtable.  The vtable is the extensibility seam for a future radar; selection
+ * is by config flag in /cfg/sensors.json, not by runtime UART probing.
  *
- * See CLAUDE.md §7.4 and §3.2 for the design rationale and note on shared
- * Andar/AI-Thinker framing (bench verification pending).
+ * See CLAUDE.md §7.4 and §3.2 for the design rationale.
  */
 
 #include "err.h"
@@ -62,26 +61,23 @@ typedef struct {
      */
     err_t (*close)(void *ctx);
 
-    /** Human-readable name for logging: "MR60BHA2" or "C1001". */
+    /** Human-readable name for logging, e.g. "MR60BHA2". */
     const char *name;
 
     /** Opaque context pointer passed to all vtable functions. */
     void *ctx;
 } radar_driver_t;
 
-/* ── Driver constructors (implemented in radar_bha2.c / radar_c1001.c) ──── */
+/* ── Driver constructors (implemented in radar_bha2.c) ───────────────────── */
 
 /** Return a pointer to the static MR60BHA2 driver struct. */
 radar_driver_t *radar_bha2_driver(void);
 
-/** Return a pointer to the static C1001 driver struct. */
-radar_driver_t *radar_c1001_driver(void);
-
 /* ── Config-driven selection (implemented in radar_select.c) ─────────────── */
 
 /**
- * Read /cfg/sensors.json, parse the "radar" key ("bha2" or "c1001"), and
- * return the corresponding driver.
+ * Read /cfg/sensors.json, parse the "radar" key ("bha2"), and return the
+ * corresponding driver.
  *
  * @return Pointer to a static driver struct, or NULL if config is missing
  *         or unknown.
