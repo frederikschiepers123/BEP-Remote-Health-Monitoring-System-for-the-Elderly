@@ -117,6 +117,12 @@ static bool g_wifi_ok = false;
 static struct altcp_tls_config       *s_tls_cfg = NULL;
 static struct mqtt_connect_client_info_t s_ci;
 static ip_addr_t                      s_broker_addr;
+/* False until the broker address is known (IP literal or mDNS/DNS resolved).
+ * When the broker host is an mDNS name and the responder/tablet is down,
+ * resolution fails — that must NOT be fatal: the reconnect path re-resolves
+ * each attempt so the device auto-connects when the tablet returns, and the
+ * sensor loop keeps publishing to the console meanwhile. */
+static bool                           s_broker_resolved = false;
 static char                           s_status_topic[80] = "";
 static char                           s_topic_env[80] = "";
 static char                           s_topic_air[80] = "";
@@ -666,6 +672,30 @@ static void i2c_scan(void)
     printf("\n");
 }
 
+/* Resolve the broker address into s_broker_addr: IP literal if broker.json
+ * carries one, else the host via lwIP DNS/mDNS (tablet.local). Sets
+ * s_broker_resolved and returns it. Non-blocking on the IP path; blocks up to
+ * timeout_ms on the resolve path (so the caller can keep it short in the retry
+ * loop to avoid stalling sensor reads while the tablet is down). */
+static bool mqtt_resolve_broker(uint32_t timeout_ms)
+{
+    if (g_broker.ip[0] && ipaddr_aton(g_broker.ip, &s_broker_addr)) {
+        s_broker_resolved = true;
+        return true;
+    }
+    if (g_broker.host[0]) {
+        printf("[bringup] resolving broker host '%s' via DNS/mDNS ...\n", g_broker.host);
+        if (resolve_broker_host(g_broker.host, &s_broker_addr, timeout_ms)) {
+            printf("[bringup] resolved %s → %s\n", g_broker.host,
+                   ipaddr_ntoa(&s_broker_addr));
+            s_broker_resolved = true;
+            return true;
+        }
+    }
+    s_broker_resolved = false;
+    return false;
+}
+
 static void mqtt_setup_and_connect(void)
 {
     printf("[bringup] building altcp_tls config (mTLS, ECDSA P-256)\n");
@@ -702,34 +732,22 @@ static void mqtt_setup_and_connect(void)
     s_ci.will_qos    = 1;
     s_ci.will_retain = 1;
 
-    /* Address resolution: try IP literal first, fall back to DNS for host. */
-    bool got_addr = false;
-    if (g_broker.ip[0] && ipaddr_aton(g_broker.ip, &s_broker_addr)) {
-        printf("[bringup] broker IP literal: %s\n", g_broker.ip);
-        got_addr = true;
-    } else if (g_broker.host[0]) {
-        printf("[bringup] resolving broker host '%s' via DNS ...\n", g_broker.host);
-        got_addr = resolve_broker_host(g_broker.host, &s_broker_addr, 5000);
-        if (got_addr) {
-            printf("[bringup] DNS: %s → %s\n", g_broker.host,
-                   ipaddr_ntoa(&s_broker_addr));
+    /* Resolve + connect. Non-fatal on failure — the main loop retries. */
+    if (mqtt_resolve_broker(5000)) {
+        printf("[bringup] mqtt_client_connect → %s:%u\n",
+               ipaddr_ntoa(&s_broker_addr), (unsigned)g_broker.port);
+        cyw43_arch_lwip_begin();
+        err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
+                                      mqtt_connect_cb, NULL, &s_ci);
+        cyw43_arch_lwip_end();
+        if (e != ERR_OK) {
+            printf("[bringup] mqtt_client_connect immediate rc=%d\n", (int)e);
         }
-    }
-    if (!got_addr) {
-        for (;;) {
-            printf("[bringup] broker addr resolve failed (ip='%s' host='%s')\n",
-                   g_broker.ip, g_broker.host);
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-    }
-    printf("[bringup] mqtt_client_connect → %s:%u\n",
-           ipaddr_ntoa(&s_broker_addr), (unsigned)g_broker.port);
-    cyw43_arch_lwip_begin();
-    err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
-                                  mqtt_connect_cb, NULL, &s_ci);
-    cyw43_arch_lwip_end();
-    if (e != ERR_OK) {
-        printf("[bringup] mqtt_client_connect immediate rc=%d\n", (int)e);
+    } else {
+        printf("[bringup] broker '%s' not resolvable yet — will keep retrying; "
+               "sensors still publish to console\n",
+               broker_addr_str());
+        s_reconnect_pending = true;   /* main loop retries resolve+connect */
     }
 }
 
@@ -739,8 +757,21 @@ static void mqtt_setup_and_connect(void)
 static void mqtt_try_reconnect(void)
 {
     if (g_mqtt_connected) return;   /* nothing to do */
+
+    /* Re-resolve every attempt: covers the mDNS case where the tablet/
+     * responder was down at boot and has since come back (and the IP-literal
+     * case where the broker just moved). Short timeout so a still-down tablet
+     * only stalls sensor reads briefly. */
+    if (!mqtt_resolve_broker(2000)) {
+        printf("[bringup] broker '%s' still unresolved (backoff %lu ms)\n",
+               broker_addr_str(), (unsigned long)s_reconnect_backoff_ms);
+        s_reconnect_backoff_ms = (s_reconnect_backoff_ms * 2u);
+        if (s_reconnect_backoff_ms > 30000u) s_reconnect_backoff_ms = 30000u;
+        return;
+    }
+
     printf("[bringup] mqtt reconnect → %s:%u (backoff %lu ms)\n",
-           broker_addr_str(), (unsigned)g_broker.port,
+           ipaddr_ntoa(&s_broker_addr), (unsigned)g_broker.port,
            (unsigned long)s_reconnect_backoff_ms);
     cyw43_arch_lwip_begin();
     err_t e = mqtt_client_connect(g_mqtt, &s_broker_addr, g_broker.port,
@@ -749,7 +780,6 @@ static void mqtt_try_reconnect(void)
     if (e != ERR_OK) {
         printf("[bringup] mqtt reconnect immediate rc=%d\n", (int)e);
     }
-    s_reconnect_pending = false;
     /* Double next backoff (cap 30 s). Reset on CONNACK ACCEPTED. */
     s_reconnect_backoff_ms = (s_reconnect_backoff_ms * 2u);
     if (s_reconnect_backoff_ms > 30000u) s_reconnect_backoff_ms = 30000u;
@@ -1077,13 +1107,16 @@ static void sensors_task(void *arg)
             s_reconnect_pending = true;
         }
 
+        /* While associated but not MQTT-connected, keep retrying with backoff.
+         * mqtt_try_reconnect re-resolves the broker each attempt, so this also
+         * covers "tablet/mDNS responder was down at boot and came back". The
+         * retry is gated only on time+backoff, not a one-shot pending flag, so
+         * it never gives up. */
         if (g_wifi_ok && !g_mqtt_connected) {
             TickType_t now = xTaskGetTickCount();
-            if (s_reconnect_pending && now >= next_reconnect_attempt) {
+            if (now >= next_reconnect_attempt) {
                 mqtt_try_reconnect();
                 next_reconnect_attempt = now + pdMS_TO_TICKS(s_reconnect_backoff_ms);
-            } else if ((tick % 5) == 0) {
-                printf("[bringup] waiting for MQTT CONNACK ...\n");
             }
         }
 
