@@ -816,20 +816,25 @@ static void render_page_air(uint32_t pub_count)
     sh1122_clear(&s_oled);
     sh1122_draw_text(&s_oled, 0, 0, 2, "AIR  /air");
     char line[40];
-    if (s_disp_air_have) {
-        if (s_disp_air_q == 0) {
-            snprintf(line, sizeof(line), "AQI %u (%s)", s_disp_aqi, aqi_str(s_disp_aqi));
-            sh1122_draw_text(&s_oled, 0, 18, 2, line);
-            snprintf(line, sizeof(line), "CO2 %u PPM", s_disp_co2);
-            sh1122_draw_text(&s_oled, 0, 36, 2, line);
-            snprintf(line, sizeof(line), "TVOC %u PPB", s_disp_tvoc);
-            sh1122_draw_text(&s_oled, 140, 36, 2, line);
-        } else {
-            snprintf(line, sizeof(line), "WARMING UP  q=%u", (unsigned)s_disp_air_q);
-            sh1122_draw_text(&s_oled, 0, 18, 2, line);
-            snprintf(line, sizeof(line), "CO2 %u  TVOC %u", s_disp_co2, s_disp_tvoc);
-            sh1122_draw_text(&s_oled, 0, 36, 2, line);
-        }
+    if (s_disp_air_have && s_disp_aqi >= 1) {
+        /* Real reading (AQI 1..5). Show it even while the ENS160 still flags
+         * INITIAL_STARTUP (q!=0) — those values are already meaningful. A
+         * trailing '*' marks not-yet-NORMAL quality. */
+        const char *flag = (s_disp_air_q == 0) ? "" : "*";
+        snprintf(line, sizeof(line), "AQI %u (%s)%s", s_disp_aqi, aqi_str(s_disp_aqi), flag);
+        sh1122_draw_text(&s_oled, 0, 18, 2, line);
+        snprintf(line, sizeof(line), "CO2 %u PPM", s_disp_co2);
+        sh1122_draw_text(&s_oled, 0, 36, 2, line);
+        snprintf(line, sizeof(line), "TVOC %u PPB", s_disp_tvoc);
+        sh1122_draw_text(&s_oled, 140, 36, 2, line);
+        snprintf(line, sizeof(line), "PUBLISHED %lu", (unsigned long)pub_count);
+        sh1122_draw_text(&s_oled, 0, 56, 1, line);
+    } else if (s_disp_air_have) {
+        /* aqi==0: chip has no usable reading yet (first seconds after power-on). */
+        snprintf(line, sizeof(line), "WARMING UP  q=%u", (unsigned)s_disp_air_q);
+        sh1122_draw_text(&s_oled, 0, 18, 2, line);
+        snprintf(line, sizeof(line), "CO2 %u  TVOC %u", s_disp_co2, s_disp_tvoc);
+        sh1122_draw_text(&s_oled, 0, 36, 2, line);
         snprintf(line, sizeof(line), "PUBLISHED %lu", (unsigned long)pub_count);
         sh1122_draw_text(&s_oled, 0, 56, 1, line);
     } else {

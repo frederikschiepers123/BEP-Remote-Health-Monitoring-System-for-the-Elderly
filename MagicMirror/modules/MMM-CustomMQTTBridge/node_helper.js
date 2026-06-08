@@ -156,7 +156,18 @@ module.exports = NodeHelper.create({
                 if (v.temp_c  != null) send("temperature", Number(v.temp_c).toFixed(1));
                 if (v.hum_pct != null) send("humidity",    Math.round(Number(v.hum_pct)).toString());
             } else if (kind === "air") {
-                if (v.aqi      != null) send("airquality", AQI_LABELS[v.aqi] || ("AQI " + v.aqi));
+                // AQI 1..5 is a valid UBA index; aqi 0 means the ENS160 has no
+                // usable reading yet (first seconds after power-on). Show the
+                // real label as soon as aqi>=1 — the chip flags data as
+                // INITIAL_STARTUP (envelope q=2) for up to ~1 h while it keeps
+                // stabilising, but those readings are already meaningful, so we
+                // do NOT hide them behind "WARMUP". Only aqi==0 shows "WARMUP".
+                if (v.aqi != null) {
+                    const label = Number(v.aqi) >= 1
+                        ? (AQI_LABELS[v.aqi] || ("AQI " + v.aqi))
+                        : "WARMUP";
+                    send("airquality", label);
+                }
                 if (v.co2_ppm  != null) send("co2",        String(v.co2_ppm));
                 if (v.tvoc_ppb != null) send("tvoc",       String(v.tvoc_ppb));
             } else if (kind === "radar") {
