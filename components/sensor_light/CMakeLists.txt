@@ -14,6 +14,7 @@ target_link_libraries(sensor_light PUBLIC
     board
     log
     cfg
+    i2c_bus
     pico_stdlib
     hardware_adc
     hardware_gpio

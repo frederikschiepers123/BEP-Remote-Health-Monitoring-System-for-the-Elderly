@@ -27,7 +27,14 @@ typedef struct {
     float temp_c;
     float hum_pct;
     float pres_hpa;
+    bool  pres_valid;    /* false → pres_hpa emitted as null (AHT21 path, §9.2.2) */
 } JsonEnvBody;
+
+typedef struct {
+    uint16_t co2_ppm;
+    uint16_t tvoc_ppb;
+    uint8_t  aqi;        /* UBA index 1..5; 0 = no usable reading yet */
+} JsonAirBody;
 
 typedef struct {
     bool  presence;
@@ -51,6 +58,10 @@ typedef struct {
 int json_encode_env(char *buf, size_t cap,
                     uint64_t ts_us, int64_t wall_ms, uint32_t seq, uint8_t q,
                     const JsonEnvBody *v);
+
+int json_encode_air(char *buf, size_t cap,
+                    uint64_t ts_us, int64_t wall_ms, uint32_t seq, uint8_t q,
+                    const JsonAirBody *v);
 
 int json_encode_radar(char *buf, size_t cap,
                       uint64_t ts_us, int64_t wall_ms, uint32_t seq, uint8_t q,

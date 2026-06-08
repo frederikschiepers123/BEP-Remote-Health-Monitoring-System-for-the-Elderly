@@ -56,6 +56,11 @@ add_subdirectory(components/storage)
 add_subdirectory(components/json)
 add_subdirectory(components/identity)
 add_subdirectory(components/cfg)
+add_subdirectory(components/i2c_bus)
+# transport_usb / transport_wifi / transport_selector / tls_context /
+# mqtt_client implement the USB-CDC-era custom stream_t stack.  v1 dropped
+# USB-CDC (ADR-0002) and the firmware no longer links them; kept building so
+# the tree stays consistent until they are removed.
 add_subdirectory(components/transport_usb)
 add_subdirectory(components/transport_wifi)
 add_subdirectory(components/transport_selector)
@@ -67,6 +72,7 @@ add_subdirectory(components/sensor_radar)
 add_subdirectory(components/sensor_light)
 add_subdirectory(components/ui_oled)
 add_subdirectory(components/ui_input)
+add_subdirectory(components/transport_mqtt)
 
 # ── Application ───────────────────────────────────────────────────────────────
 add_subdirectory(main)

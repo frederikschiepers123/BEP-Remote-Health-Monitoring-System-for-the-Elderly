@@ -18,7 +18,11 @@
  * timer task (configMAX_PRIORITIES-1) and above the cyw43 async-context worker
  * (tskIDLE_PRIORITY+4). */
 #define TCPIP_MBOX_SIZE                 8
-#define TCPIP_THREAD_STACKSIZE          2048
+/* 4096 words (16 KB): the mbedTLS ECDSA-P256 handshake for altcp_tls runs in
+ * the tcpip thread context under NO_SYS=0, so this stack must cover it (a
+ * 2048-word stack overflows mid-handshake). The bring-up's threadsafe_background
+ * model ran the handshake in the cyw43 async-context stack instead. */
+#define TCPIP_THREAD_STACKSIZE          4096
 #define TCPIP_THREAD_PRIO               (configMAX_PRIORITIES - 2)
 #define DEFAULT_THREAD_STACKSIZE        1024
 #define DEFAULT_RAW_RECVMBOX_SIZE       8

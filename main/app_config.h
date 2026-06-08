@@ -17,27 +17,29 @@
 
 #define TASK_PRI_APP_MAIN   2
 #define TASK_PRI_ENV        3
+#define TASK_PRI_AIR        3
 #define TASK_PRI_LIGHT      3
 #define TASK_PRI_RADAR      4
 #define TASK_PRI_UI         2
 #define TASK_PRI_TRANSPORT  5
-#define TASK_PRI_SELECTOR   6
 
 /* ── Task stack sizes (in words = 4 bytes each) ──────────────────────────── */
 
 #define TASK_STACK_APP_MAIN   512U    /*  2 KB */
 #define TASK_STACK_ENV        512U    /*  2 KB */
+#define TASK_STACK_AIR        512U    /*  2 KB */
 #define TASK_STACK_RADAR      1024U   /*  4 KB */
-#define TASK_STACK_LIGHT      256U    /*  1 KB */
+#define TASK_STACK_LIGHT      512U    /*  2 KB */
 #define TASK_STACK_UI         1024U   /*  4 KB */
-#define TASK_STACK_TRANSPORT  1536U   /*  6 KB */
-#define TASK_STACK_SELECTOR   512U    /*  2 KB */
+/* transport_task runs cyw43 + lwIP + altcp_tls + mqtt; needs generous stack. */
+#define TASK_STACK_TRANSPORT  4096U   /* 16 KB */
 
 /* ── Watchdog task IDs ───────────────────────────────────────────────────── */
 
 typedef enum {
     WDT_TASK_APP_MAIN = 0,
     WDT_TASK_ENV,
+    WDT_TASK_AIR,
     WDT_TASK_RADAR,
     WDT_TASK_LIGHT,
     WDT_TASK_UI,
@@ -48,6 +50,7 @@ typedef enum {
 /* ── FreeRTOS queue depths ───────────────────────────────────────────────── */
 
 #define Q_ENV_DEPTH      4U
+#define Q_AIR_DEPTH      4U
 #define Q_RADAR_DEPTH    4U
 #define Q_LIGHT_DEPTH    4U
 
@@ -58,11 +61,7 @@ typedef enum {
 
 /* ── MQTT keepalive seconds ──────────────────────────────────────────────── */
 
-#define MQTT_KEEPALIVE_USB   30U   /* seconds */
+/* Wi-Fi is the sole transport in v1 (ADR-0002 — USB-CDC dropped). */
 #define MQTT_KEEPALIVE_WIFI  60U   /* seconds */
-
-/* ── USB probe timeout ───────────────────────────────────────────────────── */
-
-#define USB_PROBE_TIMEOUT_MS  8000U   /* 8 s per CLAUDE.md §2.2 */
 
 #endif /* APP_CONFIG_H */

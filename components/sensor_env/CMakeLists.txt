@@ -15,6 +15,7 @@ target_link_libraries(sensor_env PUBLIC
     log
     storage
     cfg
+    i2c_bus
     pico_stdlib
     hardware_i2c
     FreeRTOS-Kernel

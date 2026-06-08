@@ -1,22 +1,23 @@
 #ifndef SENSOR_LIGHT_H
 #define SENSOR_LIGHT_H
 
-/* Light sensor task — GL5516 LDR via ADC.
+/* Ambient-light sensor task.
  *
- * Publishes LightSample to q_light at 1 Hz.  The transport_task drains the
- * queue and forwards via MQTT.
+ * The concrete sensor (BH1750 over I²C on the advanced module, or a GL5516 LDR
+ * on ADC0 on the generic module) is selected at runtime from /cfg/sensors.json
+ * via the light_driver_t vtable (light_select.c); light_task is unaware of
+ * which variant is populated.  See ADR-0001.
  *
- * ADC pin / channel come from board_pico2wh.h.
- * Voltage divider: LDR in series with 10 kΩ pull-down to GND; ADC reads
- * the midpoint (LDR connects to Vcc = 3.3 V).
+ * Publishes LightMsg to q_light at 0.2 Hz (CLAUDE.md §7.1 — ambient lux barely
+ * moves within a second, and the mirror tile needs no fast refresh).  The
+ * transport_task drains q_light, stamps the §9.2.1 envelope, and forwards
+ * via MQTT.
  *
- * Lux approximation:
- *   adc_raw  ∈ [0, 4095] for 12-bit ADC
- *   v_adc    = adc_raw * 3.3 / 4096   (volts)
- *   r_ldr    = R_REF * v_adc / (3.3 - v_adc)   where R_REF = 10 000 Ω
- *   lux      = 10.0 * (10000.0 / r_ldr)
- */
+ * The BH1750 path touches I²C0 (shared bus): every read takes the i2c_bus
+ * lock.  The GL5516 path reads ADC0 only, but takes the lock anyway for a
+ * uniform call shape — ADC reads are sub-microsecond. */
 
+#include "light_driver.h"   /* LightSample { float lux; } */
 #include "err.h"
 
 #include "FreeRTOS.h"
@@ -24,14 +25,14 @@
 
 #include <stdint.h>
 
-/* ── Sample type ─────────────────────────────────────────────────────────── */
+/* ── Queue message ──────────────────────────────────────────────────────────
+ * The driver fills the LightSample v-body; light_task adds the quality flag.
+ * ts_us/seq are stamped by the transport at publish time (§9.2.1). */
 
 typedef struct {
-    uint64_t ts_us;     /* monotonic microseconds since boot */
-    uint32_t seq;       /* per-topic monotonic counter */
-    float    lux;       /* approximate illuminance */
-    uint8_t  q;         /* 0=ok, 3=invalid */
-} LightSample;
+    LightSample v;          /* driver sample: lux */
+    uint8_t     q;          /* 0=ok, 2=degraded (saturated), 3=invalid */
+} LightMsg;
 
 /* ── Shared queue ────────────────────────────────────────────────────────── */
 
@@ -39,10 +40,7 @@ extern QueueHandle_t q_light;
 
 /* ── API ─────────────────────────────────────────────────────────────────── */
 
-/**
- * Initialise the light component.  Creates q_light.
- * Must be called before the scheduler starts.
- */
+/** Create q_light.  Call from app_main before the scheduler starts. */
 err_t light_task_init(void);
 
 /** FreeRTOS task entry point.  Never returns. */

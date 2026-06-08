@@ -2,11 +2,11 @@ add_executable(sensor_module app_main.c)
 
 target_include_directories(sensor_module PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}   # tusb_config.h
 )
 
-# Disable pico-sdk's built-in stdio over USB/UART — TinyUSB manages CDC directly.
-pico_enable_stdio_usb(sensor_module 0)
+# v1 has no USB-CDC tablet link (ADR-0002).  LOG_* goes to a plain USB-serial
+# dev console (§12); enable pico-sdk stdio over USB for it.
+pico_enable_stdio_usb(sensor_module 1)
 pico_enable_stdio_uart(sensor_module 0)
 
 target_link_libraries(sensor_module PRIVATE
@@ -15,18 +15,20 @@ target_link_libraries(sensor_module PRIVATE
     storage
     json
     identity
-    transport_usb
-    transport_wifi
-    transport_selector
-    tls_context
-    mqtt_client
+    cfg
+    i2c_bus
     sensor_env
+    sensor_air
     sensor_radar
     sensor_light
     ui_oled
     ui_input
+    transport_mqtt
     pico_stdlib
     pico_cyw43_arch_lwip_sys_freertos
+    pico_lwip_mqtt
+    pico_lwip_mbedtls
+    pico_mbedtls
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
 )

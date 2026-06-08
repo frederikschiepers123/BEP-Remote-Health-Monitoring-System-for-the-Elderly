@@ -1,5 +1,5 @@
 add_library(ui_oled STATIC
-    sh1106.c
+    sh1122.c
     ui_oled.c
 )
 
@@ -11,10 +11,8 @@ target_include_directories(ui_oled PUBLIC
 target_link_libraries(ui_oled PUBLIC
     board
     log
-    transport_selector
-    sensor_env
-    sensor_radar
-    sensor_light
+    i2c_bus
+    identity
     pico_stdlib
     hardware_i2c
     FreeRTOS-Kernel

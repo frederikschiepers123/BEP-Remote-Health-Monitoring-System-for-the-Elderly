@@ -7,12 +7,15 @@
 #include "board_pico2wh.h"
 #include "storage.h"
 #include "identity.h"
+#include "cfg.h"
+#include "i2c_bus.h"
 #include "sensor_env.h"
+#include "sensor_air.h"
 #include "radar_driver.h"
 #include "sensor_light.h"
 #include "ui_oled.h"
 #include "ui_input.h"
-#include "transport_selector.h"
+#include "transport_mqtt.h"
 
 /* External task entry points — declared in their respective component headers,
  * but we need to create them here. */
@@ -23,10 +26,7 @@
 
 /* pico-sdk */
 #include "pico/stdlib.h"
-#include "hardware/i2c.h"
-#include "hardware/spi.h"
-#include "hardware/uart.h"
-#include "hardware/adc.h"
+#include "hardware/gpio.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -35,6 +35,11 @@
 /* ── Global identity (read by ui_oled.c) ─────────────────────────────────── */
 
 Identity g_identity;
+
+/* Per-deployment config — must outlive the transport task, which keeps
+ * pointers into these (Wi-Fi creds, broker address). */
+static CfgWifi   g_wifi;
+static CfgBroker g_broker;
 
 /* ── FreeRTOS application hooks (required by FreeRTOSConfig.h) ────────────── */
 
@@ -77,10 +82,20 @@ void vApplicationMallocFailedHook(void)
  */
 static volatile uint8_t s_wdt_miss[WDT_TASK_COUNT];
 
+/*
+ * A task is "armed" only after its first heartbeat.  The supervisor ignores
+ * un-armed slots, which gives a task an unbounded grace period to reach its
+ * steady-state loop — essential for transport_task, whose Wi-Fi bring-up
+ * (cyw43 init + up to 30 s associate) blocks far longer than the 2 s miss
+ * window.  Once a task has heartbeated once it must keep doing so within 2 s.
+ */
+static volatile bool s_wdt_armed[WDT_TASK_COUNT];
+
 void wdt_task_alive(WdtTaskId id)
 {
     if (id < WDT_TASK_COUNT) {
-        s_wdt_miss[id] = 0;
+        s_wdt_miss[id]  = 0;
+        s_wdt_armed[id] = true;
     }
 }
 
@@ -115,6 +130,7 @@ static void app_main_task(void *arg)
         /* Check watchdog table */
         for (int i = 0; i < (int)WDT_TASK_COUNT; i++) {
             if (i == (int)WDT_TASK_APP_MAIN) { continue; }
+            if (!s_wdt_armed[i]) { continue; }   /* not yet in steady state */
 
             s_wdt_miss[i]++;
             if (s_wdt_miss[i] >= 2) {
@@ -149,27 +165,26 @@ static void app_main_task(void *arg)
 
 static void board_hw_init(void)
 {
-    stdio_init_all();   /* early init only; TinyUSB takes over CDC later */
-
-    /* I²C0: BME280 + SH1106 OLED */
-    i2c_init(BOARD_I2C_INST, BOARD_I2C_FREQ_HZ);
-    gpio_set_function(BOARD_I2C_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(BOARD_I2C_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(BOARD_I2C_SDA_PIN);
-    gpio_pull_up(BOARD_I2C_SCL_PIN);
+    stdio_init_all();   /* USB-serial dev console for LOG_* (§12 v1) */
 
     /*
-     * UART0 for radar: initialised by the radar driver (radar_bha2.c /
-     * radar_c1001.c) because the driver owns the UART configuration.
-     * We do NOT call uart_init here to avoid double-init.
+     * I²C0 (AHT21/BME280 + ENS160 + BH1750 + SH1122 OLED) is initialised by
+     * i2c_bus_init() in main(), which also creates the shared bus mutex —
+     * one owner of the bus configuration (§7.2).
+     *
+     * UART (radar) is initialised by the radar driver (it owns the config).
+     * ADC (GL5516) is initialised by sensor_light.c.
      */
 
-    /*
-     * SPI0 for IR camera: TODO(spec) — driver initialises SPI when the
-     * part is confirmed (CLAUDE.md §16 Q1).  Not initialised here.
-     */
+    /* Discrete UI GPIO: PWR LED lit at boot, Wi-Fi LED off until associated
+     * (transport_task drives it).  SW2 (page cycle) is set up by ui_input. */
+    gpio_init(BOARD_LED_POWER_PIN);
+    gpio_set_dir(BOARD_LED_POWER_PIN, GPIO_OUT);
+    gpio_put(BOARD_LED_POWER_PIN, 1);
 
-    /* ADC for LDR: initialised by sensor_light.c */
+    gpio_init(BOARD_LED_WIFI_PIN);
+    gpio_set_dir(BOARD_LED_WIFI_PIN, GPIO_OUT);
+    gpio_put(BOARD_LED_WIFI_PIN, 0);
 
     LOG_I("Board hardware init complete");
 }
@@ -200,9 +215,22 @@ int main(void)
         LOG_I("Device UUID: %s", g_identity.uuid);
     }
 
+    /* Load per-deployment config (Wi-Fi creds, broker address). */
+    err = cfg_load_wifi(&g_wifi);
+    if (err != ERR_OK) { LOG_E("cfg_load_wifi: %d — /cfg/wifi.json missing?", err); }
+    err = cfg_load_broker(&g_broker);
+    if (err != ERR_OK) { LOG_E("cfg_load_broker: %d — /cfg/broker.json missing?", err); }
+
+    /* Initialise the shared I²C0 bus + mutex before any sensor task runs. */
+    err = i2c_bus_init();
+    if (err != ERR_OK) { LOG_E("i2c_bus_init: %d", err); }
+
     /* Initialise component queues (must happen before tasks start) */
     err = env_task_init();
     if (err != ERR_OK) { LOG_E("env_task_init: %d", err); }
+
+    err = air_task_init();
+    if (err != ERR_OK) { LOG_E("air_task_init: %d", err); }
 
     err = radar_task_init();
     if (err != ERR_OK) { LOG_E("radar_task_init: %d", err); }
@@ -213,17 +241,22 @@ int main(void)
     err = ui_oled_init();
     if (err != ERR_OK) { LOG_E("ui_oled_init: %d", err); }
 
-    /* Initialise watchdog table to zero (all alive) */
+    /* Hand identity + config to the transport task (stores references). */
+    err = transport_mqtt_init(&g_identity, &g_wifi, &g_broker);
+    if (err != ERR_OK) { LOG_E("transport_mqtt_init: %d", err); }
+
+    /* Initialise watchdog table: all slots un-armed until first heartbeat. */
     for (int i = 0; i < (int)WDT_TASK_COUNT; i++) {
-        s_wdt_miss[i] = 0;
+        s_wdt_miss[i]  = 0;
+        s_wdt_armed[i] = false;
     }
 
     /* ── Create FreeRTOS tasks ─────────────────────────────────────────────
      *
      * Core affinity per CLAUDE.md §7.1:
-     *   Core 0: app_main, ui_task, transport_task, selector_task
+     *   Core 0: app_main, ui_task, transport_task
      *   Core 1: radar_task
-     *   Any:    env_task, light_task
+     *   Any:    env_task, air_task, light_task
      *
      * xTaskCreateAffinitySet: affinity mask bit 0 = Core 0, bit 1 = Core 1.
      * 0x3 = both cores (any), 0x1 = Core 0 only, 0x2 = Core 1 only.
@@ -239,6 +272,12 @@ int main(void)
     xTaskCreateAffinitySet(env_task, "env",
                            TASK_STACK_ENV, NULL,
                            TASK_PRI_ENV,
+                           0x3U,   /* Any */
+                           &h);
+
+    xTaskCreateAffinitySet(air_task, "air",
+                           TASK_STACK_AIR, NULL,
+                           TASK_PRI_AIR,
                            0x3U,   /* Any */
                            &h);
 
@@ -261,17 +300,13 @@ int main(void)
                            &h);
 
     /*
-     * Transport selector: initialise, then create selector_task.
-     * Must be last — it needs all queues and identity loaded.
+     * Transport task (Wi-Fi + mTLS + MQTT): owns the network path and is the
+     * sole consumer of the producer queues.  Created last — it needs all
+     * queues, identity, and config loaded.  Core 0, highest app priority.
      */
-    err = transport_selector_init(&g_identity);
-    if (err != ERR_OK) {
-        LOG_E("transport_selector_init: %d", err);
-    }
-
-    xTaskCreateAffinitySet(transport_selector_task, "selector",
-                           TASK_STACK_SELECTOR, NULL,
-                           TASK_PRI_SELECTOR,
+    xTaskCreateAffinitySet(transport_task, "transport",
+                           TASK_STACK_TRANSPORT, NULL,
+                           TASK_PRI_TRANSPORT,
                            0x1U,   /* Core 0 */
                            &h);
 
