@@ -34,11 +34,11 @@ const mqtt       = require("mqtt");
 const fs         = require("fs");
 
 const AQI_LABELS = {
-    1: "EXCELLENT",
-    2: "GOOD",
-    3: "MODERATE",
-    4: "POOR",
-    5: "UNHEALTHY",
+    1: "Excellent",
+    2: "Good",
+    3: "Moderate",
+    4: "Poor",
+    5: "Unhealthy",
 };
 
 function readFileIfSet(path) {

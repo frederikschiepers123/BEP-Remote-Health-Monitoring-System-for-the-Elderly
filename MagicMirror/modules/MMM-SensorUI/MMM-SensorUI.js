@@ -11,6 +11,41 @@
 // let tvoc = 300; // ENS
 // let aqi = 28; // ENS
 
+const DISPLAY_MODE = "icons";
+// const DISPLAY_MODE = "colors";
+
+const THRESHOLDS = {
+
+  heartRate: {
+    green: [60, 100],
+    yellow: [50, 110]
+  },
+
+  respiratoryRate: {
+    green: [12, 20],
+    yellow: [10, 24]
+  },
+
+  temperature: {
+    green: [20, 24],
+    yellow: [18, 27]
+  },
+
+  humidity: {
+    green: [40, 60],
+    yellow: [30, 70]
+  },
+
+};
+
+const AIR_QUALITY_STATUS = {
+  "Excellent": "green",
+  "Good": "green",
+  "Moderate": "yellow",
+  "Poor": "red",
+  "Unhealthy": "red",
+};
+
 Module.register("MMM-SensorUI", {
   defaults: {},
 
@@ -21,7 +56,7 @@ Module.register("MMM-SensorUI", {
     this.respiratoryRateTL = "green";
 
     this.temperature = "...";
-    this.temperatureTL = "yellow";
+    this.temperatureTL = "green";
     this.humidity = "...";
     this.humidityTL = "green";
 
@@ -30,11 +65,23 @@ Module.register("MMM-SensorUI", {
 
     this.infoMessage = "All systems operating normally.";
 
-    this.pressure = "...";
-    this.co2 = "...";
-    this.tvoc = "...";
-    this.aqi = "...";
   },
+
+  // start: function () {
+  //   this.heartRate = "55";
+  //   this.respiratoryRate = "12";
+  //   this.temperature = "17";
+  //   this.humidity = "65";
+  //   this.airQuality = "Moderate";
+
+  //   this.heartRateTL = getTrafficLight(this.heartRate, THRESHOLDS.heartRate); // TL = trafficlight
+  //   this.respiratoryRateTL = getTrafficLight(this.respiratoryRate, THRESHOLDS.respiratoryRate);
+  //   this.temperatureTL = getTrafficLight(this.temperature, THRESHOLDS.temperature);
+  //   this.humidityTL = getTrafficLight(this.humidity, THRESHOLDS.humidity);
+  //   this.airQualityTL = AIR_QUALITY_STATUS[this.airQuality] || "red";
+
+  //   this.infoMessage = "All systems operating normally.";
+  // },
 
   // Define required scripts.
   getStyles () {
@@ -98,24 +145,6 @@ Module.register("MMM-SensorUI", {
         )
       );
     }
-
-    // vitalWrapper.appendChild(
-    //   createStatusCard(
-    //     "fa-heart-pulse",
-    //     this.heartRate,
-    //     "BPM",
-    //     this.heartRateTL
-    //   )
-    // );
-
-    // vitalWrapper.appendChild(
-    //   createStatusCard(
-    //     "fa-lungs",
-    //     this.respiratoryRate,
-    //     "RPM",
-    //     this.respiratoryRateTL
-    //   )
-    // );
 
     /*
       * =========================
@@ -182,32 +211,6 @@ Module.register("MMM-SensorUI", {
       );
     }
 
-    // envWrapper.appendChild(
-    //   createStatusCard(
-    //     "fa-temperature-half",
-    //     this.temperature,
-    //     "°C",
-    //     this.temperatureTL
-    //   )
-    // );
-
-    // envWrapper.appendChild(
-    //   createStatusCard(
-    //     "fa-droplet",
-    //     this.humidity,
-    //     "%",
-    //     this.humidityTL
-    //   )
-    // );
-
-    // envWrapper.appendChild(
-    //   createStatusCard(
-    //     "fa-wind",
-    //     this.airQuality,
-    //     "AQI",
-    //     this.airQualityTL
-    //   )
-    // );    
 
     /*
     * =========================
@@ -243,106 +246,7 @@ Module.register("MMM-SensorUI", {
     return wrapper;
 
   },
-    // // LEFT COLUMN (4 sensors)
-    // const col1 = document.createElement("div");
-    // col1.className = "sensorColumn";
 
-    // const sensorsLeft = [
-    //   {
-    //     icon: "fa-heartbeat",
-    //     value: this.heartRate,
-    //     label: "BPM"
-    //   },
-    //   {
-    //     icon: "fa-lungs",
-    //     value: this.respiratoryRate,
-    //     label: "RPM"
-    //   },
-    //   {
-    //     icon: "fa-temperature-half",
-    //     value: this.temperature + "°C",
-    //     label: "Temperature"
-    //   },
-    //   {
-    //     icon: "fa-droplet",
-    //     value: this.humidity + "%",
-    //     label: "Humidity"
-    //   }
-    // ];
-
-    // sensorsLeft.forEach(sensor => {
-    //   col1.appendChild(createSensor(sensor));
-    // });
-
-    // // RIGHT COLUMN (3 sensors)
-    // const col2 = document.createElement("div");
-    // col2.className = "sensorColumn";
-
-    // const sensorsRight = [
-    //   // {
-    //   //   icon: "fa-gauge",
-    //   //   value: this.pressure + " hPa",
-    //   //   label: "Pressure"
-    //   // },
-    //   {
-    //     icon: "fa-smog",
-    //     value: this.co2 + " ppm",
-    //     label: "CO2"
-    //   },
-    //   {
-    //     icon: "fa-wind",
-    //     value: this.tvoc + " ppb",
-    //     label: "TVOC"
-    //   },
-    //   {
-    //     icon: "fa-chart-simple",
-    //     value: this.aqi,
-    //     label: "AQI"
-    //   }
-    // ];
-
-    // sensorsRight.forEach(sensor => {
-    //   col2.appendChild(createSensor(sensor));
-    // });
-
-    // // Assemble layout
-    // wrapper.appendChild(col1);
-    // wrapper.appendChild(col2);
-
-    // return wrapper;
-  // }, 
-
-//   notificationReceived: function(notification, payload, sender) {
-
-//       if (notification === "MQTT_SENSOR_UPDATE") {
-
-//           console.log("SensorUI received:", payload);
-
-//           // Example topic handling
-//           if (payload.topic === "sensors/heartrate") {
-//               this.heartRate = payload.message;
-//           }
-//           if (payload.topic === "sensors/respiratoryrate") {
-//               this.respiratoryRate = payload.message;
-//           }
-//           if (payload.topic === "sensors/temperature") {
-//               this.temperature = payload.message;
-//           }
-//           if (payload.topic === "sensors/humidity") {
-//               this.humidity = payload.message;
-//           }
-//           if (payload.topic === "sensors/airquality") {
-//               this.airQuality = payload.message;
-//           }
-//           if (payload.topic === "sensors/infomessage") {
-//               this.infoMessage = payload.message;
-//           }
-
-//           this.updateDom();
-//       }
-//   }
-
-// });
 
 notificationReceived: function(notification, payload, sender) {
 
@@ -353,18 +257,44 @@ notificationReceived: function(notification, payload, sender) {
           // Example topic handling
           if (payload.topic === "sensors/heartrate") {
               this.heartRate = payload.message;
+
+              this.heartRateTL =
+                getTrafficLight(
+                  this.heartRate,
+                  THRESHOLDS.heartRate
+                );
           }
           if (payload.topic === "sensors/respiratoryrate") {
               this.respiratoryRate = payload.message;
+
+              this.heartRateTL =
+                getTrafficLight(
+                  this.respiratoryRate,
+                  THRESHOLDS.respiratoryRate
+                );
           }
           if (payload.topic === "sensors/temperature") {
               this.temperature = payload.message;
+
+              this.heartRateTL =
+                getTrafficLight(
+                  this.temperature,
+                  THRESHOLDS.temperature
+                );
           }
           if (payload.topic === "sensors/humidity") {
               this.humidity = payload.message;
+
+              this.heartRateTL =
+                getTrafficLight(
+                  this.humidity,
+                  THRESHOLDS.humidity
+                );
           }
           if (payload.topic === "sensors/airquality") {
               this.airQuality = payload.message;
+
+              this.airQualityTL = AIR_QUALITY_STATUS[this.airQuality] || "red";
           }
           if (payload.topic === "sensors/infomessage") {
               this.infoMessage = payload.message;
@@ -376,27 +306,6 @@ notificationReceived: function(notification, payload, sender) {
 
 });
 
-// function createSensor(sensor) {
-//   const sensorDiv = document.createElement("div");
-//   sensorDiv.className = "sensor";
-
-//   const icon = document.createElement("i");
-//   icon.className = `fas ${sensor.icon} sensorIcon`;
-
-//   const value = document.createElement("div");
-//   value.className = "sensorValue";
-//   value.innerHTML = sensor.value;
-
-//   const label = document.createElement("div");
-//   label.className = "sensorLabel";
-//   label.innerHTML = sensor.label;
-
-//   sensorDiv.appendChild(icon);
-//   sensorDiv.appendChild(value);
-//   sensorDiv.appendChild(label);
-
-//   return sensorDiv;
-// }
 
 function createStatusCard(iconName, value, unit, status, textOnly = false) {
 
@@ -417,6 +326,21 @@ function createStatusCard(iconName, value, unit, status, textOnly = false) {
 
   const valueDiv = document.createElement("div");
   valueDiv.className = "statusValue";
+
+  if (DISPLAY_MODE === "colors") {
+
+    if (status === "green") {
+      valueDiv.classList.add("statusGreen");
+    }
+
+    else if (status === "yellow") {
+      valueDiv.classList.add("statusYellow");
+    }
+
+    else if (status === "red") {
+      valueDiv.classList.add("statusRed");
+    }
+  }
 
   if (textOnly) {
 
@@ -442,21 +366,6 @@ function createStatusCard(iconName, value, unit, status, textOnly = false) {
     valueDiv.appendChild(unitSpan);
   }
 
-  // const valueDiv = document.createElement("div");
-  // valueDiv.className = "statusValue";
-
-  // const numberSpan = document.createElement("span");
-  // numberSpan.className = "statusNumber";
-  // numberSpan.innerHTML = value;
-
-  // const unitSpan = document.createElement("span");
-  // unitSpan.className = "statusUnit";
-  // unitSpan.innerHTML = unit;
-
-  // valueDiv.appendChild(numberSpan);
-  // valueDiv.appendChild(unitSpan);
-
-  // valueDiv.innerHTML = `${value}${unit}`;
 
   /*
    * STATUS ICON
@@ -490,7 +399,9 @@ function createStatusCard(iconName, value, unit, status, textOnly = false) {
 
   card.appendChild(icon);
   card.appendChild(valueDiv);
-  card.appendChild(statusDiv);
+  if (DISPLAY_MODE === "icons") {
+    card.appendChild(statusDiv);
+  }
 
   return card;
 }
@@ -500,4 +411,23 @@ function hasValue(value) {
          value !== undefined &&
          value !== null &&
          value !== "";
+}
+
+function getTrafficLight(value, threshold) {
+
+  value = Number(value);
+
+  const [greenMin, greenMax] = threshold.green;
+
+  if (value >= greenMin && value <= greenMax) {
+    return "green";
+  }
+
+  const [yellowMin, yellowMax] = threshold.yellow;
+
+  if (value >= yellowMin && value <= yellowMax) {
+    return "yellow";
+  }
+
+  return "red";
 }
