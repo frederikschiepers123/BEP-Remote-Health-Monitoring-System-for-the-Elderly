@@ -1257,10 +1257,16 @@ Resolve each, then strip the TODO.
 8. **Cert lifetimes.** Device certs need an expiry date. 1 year? 5 years? The
    shorter the more frequent re-provisioning; the longer the more damage from
    a compromise. Recommend 2 years for v1; revisit for v2.
-9. **Mosquitto ACL pattern verification.** Confirm `use_identity_as_username true`
-   + `pattern write rmms/%c/#` works as intended on the Mosquitto build that
-   ships with Termux. ACL test harness must run on the tablet before any
-   firmware integration test.
+9. ~~**Mosquitto ACL pattern verification.**~~ **Resolved.** The Termux
+   Mosquitto build enforces the ACL as intended. The broker uses
+   `use_identity_as_username true` with `pattern write rmms/%u/#` /
+   `pattern read rmms/%u/cmd` (keying on the cert CN, which is stronger than
+   matching client_id). `scripts/test_broker_acl.sh <broker-ip>` is the
+   harness; it proved all of: device writes only its own subtree, cross-device
+   publish blocked, operator writes only info/screen (not env), device reads
+   only its own /cmd, cross-device read blocked, and connections without a
+   client cert refused (`require_certificate true`). 7/7 assertions pass
+   against the live tablet broker. This is bring-up step 16.
 
 **Resolved since last revision:**
 - mmWave radar choice: dual support for Seeed MR60BHA2 and DFRobot C1001 via
