@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import org.eclipse.paho.client.mqttv3.MqttClient
@@ -20,47 +19,65 @@ class MQTTService : Service() {
         createNotificationChannel()
         startForeground(2, createNotification())
 
-        Thread {
-            connectMqtt()
-        }.start()
+        if (client == null || !client!!.isConnected) {
+            Thread {
+                connectMqtt()
+            }.start()
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_STICKY
     }
 
     private fun connectMqtt() {
-        try {
-            // Use 127.0.0.1 since the broker is running on the same device (Termux)
-            val brokerUrl = "tcp://127.0.0.1:1883"
-            
-            client = MqttClient(
-                brokerUrl,
-                MqttClient.generateClientId(),
-                null
-            )
+        var connected = false
+        while (!connected) {
+            try {
+                // Use 127.0.0.1 since the broker is running on the same device (Termux)
+                val brokerUrl = "tcp://127.0.0.1:1883"
+                
+                if (client == null) {
+                    client = MqttClient(
+                        brokerUrl,
+                        MqttClient.generateClientId(),
+                        null
+                    )
+                }
 
-            val options = MqttConnectOptions()
-            options.isAutomaticReconnect = true
-            options.isCleanSession = true
-            options.connectionTimeout = 10
+                val options = MqttConnectOptions()
+                options.isAutomaticReconnect = true
+                options.isCleanSession = true
+                options.connectionTimeout = 10
 
-            Log.d("MQTT", "Connecting to $brokerUrl...")
-            client?.connect(options)
+                Log.d("MQTT", "Connecting to $brokerUrl...")
+                client?.connect(options)
 
-            Log.d("MQTT", "Connected successfully")
-            broadcastStatus("Connected to $brokerUrl")
+                Log.d("MQTT", "Connected successfully")
+                broadcastStatus("Connected to $brokerUrl")
 
-            client?.subscribe("display") { _, message ->
-                val payload = String(message.payload).trim().uppercase()
-                Log.d("MQTT", "Received: $payload")
-                handleCommand(payload)
+                client?.subscribe("display") { _, message ->
+                    val payload = String(message.payload).trim().uppercase()
+                    Log.d("MQTT", "Received: $payload")
+                    handleCommand(payload)
+                }
+                connected = true
+
+            } catch (e: Exception) {
+                Log.e("MQTT", "Connection error, retrying in 5s...", e)
+                val errorMessage = if (e is org.eclipse.paho.client.mqttv3.MqttException) {
+                    "MQTT ERROR: ${e.reasonCode} - ${e.message}"
+                } else {
+                    "MQTT ERROR: ${e.message}"
+                }
+                broadcastStatus("$errorMessage. Retrying...")
+                
+                try {
+                    Thread.sleep(5000)
+                } catch (_: InterruptedException) {
+                    break
+                }
             }
-
-        } catch (e: Exception) {
-            Log.e("MQTT", "Connection error", e)
-            val errorMessage = if (e is org.eclipse.paho.client.mqttv3.MqttException) {
-                "MQTT ERROR: ${e.reasonCode} - ${e.message}"
-            } else {
-                "MQTT ERROR: ${e.message}"
-            }
-            broadcastStatus(errorMessage)
         }
     }
 
@@ -87,15 +104,13 @@ class MQTTService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "mqtt_service",
-                "MQTT Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            "mqtt_service",
+            "MQTT Service",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {
