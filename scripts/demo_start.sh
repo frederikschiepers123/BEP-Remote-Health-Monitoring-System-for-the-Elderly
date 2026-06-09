@@ -96,9 +96,13 @@ else
       pkill -f tablet_presence_screen.py 2>/dev/null || true
       sleep 0.5
       setsid nohup python3 -u tablet_presence_screen.py --insecure </dev/null > presence.log 2>&1 &
-      sleep 2
-      cat presence.log
-    " || echo "[demo] WARNING: presence bridge start failed (paho-mqtt? mirror cert? :1883 listener?)"
+      sleep 3
+      if pgrep -f tablet_presence_screen.py >/dev/null 2>&1; then
+        echo '[tablet] presence bridge running'; tail -n 3 presence.log 2>/dev/null || true
+      else
+        echo '[tablet] presence bridge NOT running — log:'; cat presence.log 2>/dev/null || true
+      fi
+    " || echo "[demo] WARNING: ssh to tablet failed during presence-bridge start"
 fi
 
 # ── 3. Mirror bridge config (WSL has no mDNS resolver → literal IP) ───────────
