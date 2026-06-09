@@ -164,18 +164,31 @@ fi
 # Paths assume the Termux user copies the broker/ directory to ~/rmms/ on the
 # tablet (see the install crib).
 cat > "$BROKER_OUT/mosquitto.conf" <<'EOF'
+# Per-listener auth: each listener below carries its own security settings.
+per_listener_settings true
+
+# ── Network listener — the firmware's broker contract (CLAUDE.md §19.1) ───────
+# Mutual TLS, cert CN as username, ACL-enforced. The ONLY network-facing
+# listener. Firmware, mirror, operator, and the presence bridge's READ side.
 listener 8883 0.0.0.0
 protocol mqtt
-
 allow_anonymous false
 require_certificate true
 use_identity_as_username true
-
 cafile   /data/data/com.termux/files/home/rmms/certs/ca.crt
 certfile /data/data/com.termux/files/home/rmms/certs/broker.crt
 keyfile  /data/data/com.termux/files/home/rmms/certs/broker.key
-
 acl_file /data/data/com.termux/files/home/rmms/acl
+
+# ── Localhost-only plain listener — on-device app IPC ONLY (ADR-0004) ─────────
+# Bound to 127.0.0.1, so NOT network-reachable: no firmware traffic ever touches
+# it. Carries the HealthMonitorWakeTest `display` topic + the presence bridge's
+# WRITE side (see docs/presence_screen_coupling.md). This is a tablet-app IPC
+# channel, distinct from — and not a weakening of — the mTLS contract above.
+# A *network*-facing plain listener would be a §19.1 violation; this is not one.
+listener 1883 127.0.0.1
+protocol mqtt
+allow_anonymous true
 
 persistence false
 log_dest stdout
