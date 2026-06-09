@@ -73,6 +73,34 @@ ssh_t "
   cat mdns.log
 " || echo "[demo] WARNING: responder start failed — Pico will fall back to a literal IP only if broker.json has one"
 
+# ── 2b. Radar-presence → tablet-screen bridge ───────────────────────────────
+# Reads rmms/+/radar (mTLS, mirror cert) and drives the HealthMonitorWakeTest
+# app's `display` topic (plain :1883): present -> ON, absent -> OFF. Needs the
+# mirror cert bundle (provision_ca.sh) + a plain localhost :1883 listener on the
+# tablet (the app's IPC channel) + paho-mqtt. All guarded — never aborts the demo.
+step "starting radar-presence → screen bridge"
+MIR_DIR="$(ls -d out/mirror-* 2>/dev/null | head -1)"
+if [ -z "$MIR_DIR" ]; then
+    echo "[demo] WARNING: no out/mirror-* cert bundle (run provision_ca.sh) — skipping presence bridge"
+else
+    ssh_t "mkdir -p '$RMMS_DIR/mirror'" || true
+    scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
+        "$MIR_DIR/ca.crt" "$MIR_DIR/cert.pem" "$MIR_DIR/key.pem" \
+        "${TERMUX_USER}@${TIP}:${RMMS_DIR}/mirror/" >/dev/null 2>&1 || \
+        echo "[demo] WARNING: mirror cert scp failed"
+    scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
+        scripts/tablet_presence_screen.py "${TERMUX_USER}@${TIP}:${RMMS_DIR}/" >/dev/null 2>&1 || true
+    ssh_t "
+      cd '$RMMS_DIR'
+      python3 -c 'import paho.mqtt.client' 2>/dev/null || pip install paho-mqtt >/dev/null 2>&1 || true
+      pkill -f tablet_presence_screen.py 2>/dev/null || true
+      sleep 0.5
+      setsid nohup python3 -u tablet_presence_screen.py --insecure </dev/null > presence.log 2>&1 &
+      sleep 2
+      cat presence.log
+    " || echo "[demo] WARNING: presence bridge start failed (paho-mqtt? mirror cert? :1883 listener?)"
+fi
+
 # ── 3. Mirror bridge config (WSL has no mDNS resolver → literal IP) ───────────
 step "pointing MagicMirror bridge at mqtts://$TIP:8883"
 sed -i -E "s|mqtts://[0-9.]+:8883|mqtts://$TIP:8883|" "$MM_CONFIG"
