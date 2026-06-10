@@ -11,8 +11,8 @@
 // let tvoc = 300; // ENS
 // let aqi = 28; // ENS
 
-const DISPLAY_MODE = "icons";
-// const DISPLAY_MODE = "colors";
+// const DISPLAY_MODE = "icons";
+const DISPLAY_MODE = "colors";
 
 const THRESHOLDS = {
 
