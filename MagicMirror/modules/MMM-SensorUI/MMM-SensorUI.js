@@ -63,7 +63,7 @@ Module.register("MMM-SensorUI", {
     this.airQuality = "...";
     this.airQualityTL = "green";
 
-    this.infoMessage = "All systems operating normally.";
+    this.infoMessage = "Don't forget to take your medicine at 5 o'clock";
 
   },
 
