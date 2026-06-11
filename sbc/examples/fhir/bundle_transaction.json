@@ -1,0 +1,582 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:1309e58a-f7bc-5eab-8f31-76ea2961cb04",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-temp-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "ambient_temp_c",
+              "display": "Ambient temperature"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 21.5,
+          "unit": "Cel",
+          "system": "http://unitsofmeasure.org",
+          "code": "Cel"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Ambient temperature: 21.5 Cel</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-temp-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:2c83712f-351b-52ad-a5bf-bfc89b78897a",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-humidity-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "19736-7",
+              "display": "Relative humidity in environment"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 55.0,
+          "unit": "%",
+          "system": "http://unitsofmeasure.org",
+          "code": "%"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Relative humidity in environment: 55.0 %</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-humidity-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:4628baac-21b7-5b9a-907c-8e4096202b6a",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-pressure-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "atmospheric_pressure_hpa",
+              "display": "Atmospheric pressure"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 1013.25,
+          "unit": "hPa",
+          "system": "http://unitsofmeasure.org",
+          "code": "hPa"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Atmospheric pressure: 1013.25 hPa</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-pressure-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:5fe9692c-c86b-5c65-a4b8-36711f68378b",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-co2-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "co2_ppm",
+              "display": "Indoor equivalent CO2"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 600,
+          "unit": "ppm",
+          "system": "http://unitsofmeasure.org",
+          "code": "[ppm]"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Indoor equivalent CO2: 600 ppm</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-co2-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:eefc97c8-761d-5553-aaab-e8ffe575a8e7",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-tvoc-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "tvoc_ppb",
+              "display": "Total volatile organic compounds"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 300,
+          "unit": "ppb",
+          "system": "http://unitsofmeasure.org",
+          "code": "[ppb]"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Total volatile organic compounds: 300 ppb</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-tvoc-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:c0b8bcea-fe27-54a2-8a0a-cffbf8c22810",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-aqi-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "uba_aqi",
+              "display": "UBA air-quality index (1-5)"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 2,
+          "unit": "{index}"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">UBA air-quality index (1-5): 2 {index}</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-aqi-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:2c20d04d-bf68-5762-9151-e35afbae4ba5",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-heart-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8867-4",
+              "display": "Heart rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 72.0,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org",
+          "code": "/min"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Heart rate: 72.0 /min</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-heart-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:16a96ce0-3791-5e72-a8e1-b561b426bb2e",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-breath-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "9279-1",
+              "display": "Respiratory rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 16.0,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org",
+          "code": "/min"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Respiratory rate: 16.0 /min</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-breath-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:53dcb847-3c56-5d06-b2a8-9336e09f1955",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-presence-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "activity"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "presence",
+              "display": "Person presence detected"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueBoolean": true,
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Person presence detected: detected</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-presence-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:c395bdf4-238e-5457-b0a1-1085486451b6",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-distance-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "subject_distance",
+              "display": "Device-to-subject distance"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 2400.0,
+          "unit": "mm",
+          "system": "http://unitsofmeasure.org",
+          "code": "mm"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Device-to-subject distance: 2400.0 mm</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-distance-100"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:10180794-14cd-5991-8156-6d27930687aa",
+      "resource": {
+        "resourceType": "Observation",
+        "identifier": [
+          {
+            "system": "urn:rmms:seq",
+            "value": "550e8400-e29b-41d4-a716-446655440000-lux-100"
+          }
+        ],
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "survey"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "urn:rmms:obs-code",
+              "code": "ambient_lux",
+              "display": "Ambient illuminance"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/example-patient-1"
+        },
+        "device": {
+          "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+        },
+        "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+        "valueQuantity": {
+          "value": 123.5,
+          "unit": "lx",
+          "system": "http://unitsofmeasure.org",
+          "code": "lx"
+        },
+        "text": {
+          "status": "generated",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Ambient illuminance: 123.5 lx</div>"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation?identifier=urn:rmms:seq|550e8400-e29b-41d4-a716-446655440000-lux-100"
+      }
+    }
+  ]
+}

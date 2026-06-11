@@ -269,8 +269,8 @@ Required environment variables:
 |---|---|---|
 | `RMMS_BROKER_HOST` | `tablet.local` | Tablet hostname or IP |
 | `RMMS_BROKER_PORT` | `8883` | mTLS listener port |
-| `RMMS_BROKER_CA_PATH` | `/etc/rmms/certs/ca.der` | Project CA |
-| `RMMS_BROKER_CERT_PATH` | `/etc/rmms/certs/radxa.crt` | This service's client cert |
+| `RMMS_BROKER_CA_PATH` | `/etc/rmms/certs/ca.pem` | Project CA (**PEM** — Python `ssl` needs PEM; the firmware uses DER for mbedTLS, so the provisioning workstation must also emit a PEM copy for the SBC) |
+| `RMMS_BROKER_CERT_PATH` | `/etc/rmms/certs/radxa.pem` | This service's client cert (PEM) |
 | `RMMS_BROKER_KEY_PATH` | `/etc/rmms/certs/radxa.key` | This service's private key |
 | `RMMS_FHIR_ENDPOINT` | `https://fhir.example.org/fhir` | Hospital FHIR base URL |
 | `RMMS_FHIR_OAUTH_TOKEN_URL` | `https://auth.example.org/token` | OAuth token endpoint |
@@ -405,16 +405,34 @@ These live in `fhir/codes.py` as Python dicts, **not** scattered through the
 codebase. New sensor fields require updating this file and adding a unit
 test.
 
-| Sensor field | LOINC code | LOINC display | UCUM unit | Notes |
-|---|---|---|---|---|
-| `temp_c` | `8310-5` | Body temperature | `Cel` | Ambient, not body temp — discuss in thesis whether to use environmental code `8328-7` instead |
-| `hum_pct` | `19736-7` | Relative humidity in environment | `%` | |
-| `pres_hpa` | `3140-1` | Barometric pressure | `kPa` | Convert hPa to kPa (divide by 10) |
-| `heart_bpm` | `8867-4` | Heart rate | `/min` | |
-| `breath_bpm` | `9279-1` | Respiratory rate | `/min` | |
-| `presence` | `76689-9` | Patient presence | (boolean) | Use `valueBoolean`, not `valueQuantity` |
-| `distance_mm` | (custom) | RMMS device-to-subject distance | `mm` | No standard LOINC; use `system=urn:rmms:loinc` with custom code |
-| `lux` | (custom) | Ambient light level | `lx` | No standard LOINC for ambient illumination |
+> **Corrected codes (do not ship a real-but-WRONG LOINC).** An earlier version
+> of this table listed LOINC `76689-9` for presence (that code is actually "Sex
+> assigned at birth"), `3140-1` for barometric pressure ("Body surface area"),
+> and `8310-5` (body temperature) for ambient temperature. Coding a measurement
+> with a real LOINC that means something else is worse than no code, so those
+> three now use the explicit `urn:rmms:obs-code` placeholder system with
+> `confirmed=False` in `fhir/codes.py` until a clinical advisor assigns a
+> verified LOINC/SNOMED code. Only verified codes use the LOINC system.
+
+| Sensor field | Code system | Code | Display | UCUM unit | Status |
+|---|---|---|---|---|---|
+| `heart_bpm` | **LOINC** | `8867-4` | Heart rate | `/min` | verified |
+| `breath_bpm` | **LOINC** | `9279-1` | Respiratory rate | `/min` | verified |
+| `hum_pct` | **LOINC** | `19736-7` | Relative humidity in environment | `%` | verified |
+| `presence` | placeholder `urn:rmms:obs-code` | `presence` | Person presence detected | (boolean) | **verify** — needs LOINC/SNOMED sign-off |
+| `temp_c` | placeholder `urn:rmms:obs-code` | `ambient_temp_c` | Ambient temperature | `Cel` | **verify** — body-temp LOINC is wrong here |
+| `pres_hpa` | placeholder `urn:rmms:obs-code` | `atmospheric_pressure_hpa` | Atmospheric pressure | `hPa` | **verify** — assign a real atm-pressure code + scale |
+| `co2_ppm` | placeholder (LOINC **or SNOMED CT** to confirm) | `co2_ppm` | Indoor equivalent CO2 | `ppm` | **verify** |
+| `tvoc_ppb` | placeholder (LOINC **or SNOMED CT** to confirm) | `tvoc_ppb` | Total VOC | `ppb` | **verify** |
+| `aqi` | placeholder (LOINC **or SNOMED CT** to confirm) | `uba_aqi` | UBA air-quality index 1-5 | `{index}` | **verify** |
+| `lux` | placeholder `urn:rmms:obs-code` | `ambient_lux` | Ambient illuminance | `lx` | **verify** — no standard LOINC |
+| `distance_mm` | placeholder `urn:rmms:obs-code` | `subject_distance` | Device-to-subject distance | `mm` | **verify** (device meta) |
+
+Requirement mapping: **medical/vital fields (`heart_bpm`, `breath_bpm`) use
+verified LOINC**; **ambient fields use a verified LOINC where one exists
+(`hum_pct`), else a flagged placeholder** pending a LOINC/SNOMED assignment.
+`presence` is treated as medical but has no verified LOINC yet, so it too is a
+flagged placeholder rather than a wrong code.
 
 **LOINC vs SNOMED CT note:** LOINC is correct for *what is measured*; SNOMED
 CT codes might be needed for *interpretation* (e.g., "tachycardia"). v1 does

@@ -1,0 +1,17 @@
+# systemd unit (CLAUDE.md §13.2). Installed by deployment/install.sh.
+[Unit]
+Description=RMMS Aggregator Service
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rmms-aggregator
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

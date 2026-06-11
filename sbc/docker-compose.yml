@@ -1,0 +1,18 @@
+# Production stack (CLAUDE.md §13.1).
+services:
+  aggregator:
+    image: rmms-aggregator:${VERSION:-latest}
+    build: .
+    restart: unless-stopped
+    env_file:
+      - /etc/rmms/aggregator.env
+    volumes:
+      - /etc/rmms/certs:/etc/rmms/certs:ro
+      - /var/lib/rmms:/var/lib/rmms
+    network_mode: host          # to reach tablet.local on the LAN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

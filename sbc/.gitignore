@@ -1,0 +1,28 @@
+# Secrets / credentials — NEVER commit (CLAUDE.md §19/§20.1)
+*.key
+*.pem
+*.der
+*.crt
+*.p12
+.env
+.env.*
+!.env.example
+creds/
+certs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+/var/lib/rmms/

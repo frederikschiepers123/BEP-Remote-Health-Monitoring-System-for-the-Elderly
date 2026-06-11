@@ -1,0 +1,46 @@
+{
+  "resourceType": "Observation",
+  "identifier": [
+    {
+      "system": "urn:rmms:seq",
+      "value": "550e8400-e29b-41d4-a716-446655440000-pressure-100"
+    }
+  ],
+  "status": "final",
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+          "code": "survey"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "system": "urn:rmms:obs-code",
+        "code": "atmospheric_pressure_hpa",
+        "display": "Atmospheric pressure"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/example-patient-1"
+  },
+  "device": {
+    "reference": "Device/550e8400-e29b-41d4-a716-446655440000"
+  },
+  "effectiveDateTime": "2024-06-09T08:00:00.000Z",
+  "valueQuantity": {
+    "value": 1013.25,
+    "unit": "hPa",
+    "system": "http://unitsofmeasure.org",
+    "code": "hPa"
+  },
+  "text": {
+    "status": "generated",
+    "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Atmospheric pressure: 1013.25 hPa</div>"
+  }
+}
