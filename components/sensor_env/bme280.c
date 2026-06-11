@@ -311,7 +311,7 @@ static err_t bme280_drv_read(void *ctx, EnvSample *out) {
     Bme280Sample s;
     err_t e = bme280_read_sample((Bme280 *)ctx, &s);
     if (e != ERR_OK) return e;
-    out->temp_c         = s.temp_c;
+    out->temp_c         = s.temp_c - ENV_TEMP_SELF_HEAT_OFFSET_C;
     out->humidity_pct   = s.humidity_pct;
     out->pressure_hpa   = s.pressure_hpa;
     out->pressure_valid = true;

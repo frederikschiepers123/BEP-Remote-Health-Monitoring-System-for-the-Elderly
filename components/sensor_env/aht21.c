@@ -135,7 +135,7 @@ static err_t aht21_drv_read(void *ctx, EnvSample *out) {
     Aht21Sample s;
     err_t e = aht21_read_sample((Aht21 *)ctx, &s);
     if (e != ERR_OK) return e;
-    out->temp_c         = s.temp_c;
+    out->temp_c         = s.temp_c - ENV_TEMP_SELF_HEAT_OFFSET_C;
     out->humidity_pct   = s.humidity_pct;
     out->pressure_hpa   = 0.0f;
     out->pressure_valid = false;

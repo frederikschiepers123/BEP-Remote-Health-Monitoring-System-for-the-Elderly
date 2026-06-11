@@ -21,11 +21,18 @@
 #include <stdint.h>
 
 typedef struct {
-    float temp_c;            /* degrees Celsius */
+    float temp_c;            /* degrees Celsius (self-heat corrected, see below) */
     float humidity_pct;      /* relative humidity 0–100 % */
     float pressure_hpa;      /* hPa; only valid if pressure_valid */
     bool  pressure_valid;
 } EnvSample;
+
+/* Board self-heating calibration: the env sensor sits on the 3V3 rail next to
+ * the Pico/radar and reads consistently ~5 °C high.  Each env driver subtracts
+ * this from temp_c at its vtable read(), so the correction applies to AHT21 and
+ * BME280 alike and to both the production firmware and the bring-up (both call
+ * read()).  Tune per enclosure if the offset changes. */
+#define ENV_TEMP_SELF_HEAT_OFFSET_C  5.0f
 
 typedef struct {
     /**
