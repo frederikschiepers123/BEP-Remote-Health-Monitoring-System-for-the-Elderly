@@ -63,7 +63,7 @@ Module.register("MMM-SensorUI", {
     this.airQuality = "...";
     this.airQualityTL = "green";
 
-    this.infoMessage = "All systems operating normally.";
+    this.infoMessage = "Don't forget to take your medicine at 5 o'clock";
 
   },
 
@@ -267,7 +267,7 @@ notificationReceived: function(notification, payload, sender) {
           if (payload.topic === "sensors/respiratoryrate") {
               this.respiratoryRate = payload.message;
 
-              this.heartRateTL =
+              this.respiratoryRateTL =
                 getTrafficLight(
                   this.respiratoryRate,
                   THRESHOLDS.respiratoryRate
@@ -276,7 +276,7 @@ notificationReceived: function(notification, payload, sender) {
           if (payload.topic === "sensors/temperature") {
               this.temperature = payload.message;
 
-              this.heartRateTL =
+              this.temperatureTL =
                 getTrafficLight(
                   this.temperature,
                   THRESHOLDS.temperature
@@ -285,7 +285,7 @@ notificationReceived: function(notification, payload, sender) {
           if (payload.topic === "sensors/humidity") {
               this.humidity = payload.message;
 
-              this.heartRateTL =
+              this.humidityTL =
                 getTrafficLight(
                   this.humidity,
                   THRESHOLDS.humidity
