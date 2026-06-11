@@ -42,6 +42,7 @@ function(add_host_test name driver)
         ${REPO_ROOT}/components/sensor_air
         ${REPO_ROOT}/components/sensor_light
         ${REPO_ROOT}/components/sensor_radar
+        ${REPO_ROOT}/components/spool
     )
     target_link_libraries(${name} PRIVATE ${CMOCKA_LIB} m)
     add_test(NAME ${name} COMMAND ${name})
@@ -52,3 +53,4 @@ add_host_test(test_aht21       components/sensor_env/aht21.c)      # AHT21/AHT20
 add_host_test(test_bh1750      components/sensor_light/bh1750.c)   # BH1750 lux conversion
 add_host_test(test_ens160      components/sensor_air/ens160.c)     # ENS160 validity + decode
 add_host_test(test_radar_bha2  components/sensor_radar/radar_bha2.c) # MR60BHA2 frame parser
+add_host_test(test_spool       components/spool/spool.c)            # NV outbound FIFO (ADR-0003)

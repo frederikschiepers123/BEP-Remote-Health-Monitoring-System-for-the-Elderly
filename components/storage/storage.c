@@ -7,6 +7,7 @@
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 #include "pico/flash.h"
+#include "flash_map.h"   /* STORAGE_FLASH_OFFSET/SIZE (shared with the spool) */
 
 #include <stdio.h>
 #include <string.h>
@@ -17,8 +18,9 @@
 
 /* ── littlefs flash backend ──────────────────────────────────────────────── */
 
-#define STORAGE_FLASH_SIZE      (256 * 1024)
-#define STORAGE_FLASH_OFFSET    (PICO_FLASH_SIZE_BYTES - STORAGE_FLASH_SIZE)
+/* STORAGE_FLASH_OFFSET / STORAGE_FLASH_SIZE come from flash_map.h, the single
+ * source of truth for the flash partition layout (it also reserves the spool
+ * region directly below this one — ADR-0003). */
 
 static int lfs_flash_read(const struct lfs_config *cfg, lfs_block_t block,
                            lfs_off_t off, void *buf, lfs_size_t size) {
