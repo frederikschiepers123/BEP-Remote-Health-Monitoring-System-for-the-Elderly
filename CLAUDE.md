@@ -150,13 +150,17 @@ The firmware owns:
 - Sensor sampling and per-sample QoS metadata.
 - MQTT publication of all sensor topics.
 - Wi-Fi link health and reconnect.
+- Radar plausibility filtering — presence debounce, distance/vitals gating +
+  smoothing (`components/sensor_radar/radar_filter.c`, supervisor-directed;
+  ADR-0005 — this reverses the earlier "filtering lives on Radxa" split,
+  because the mirror consumes the raw topics directly per §9.5 and needs
+  stable values).
 - Local OLED UI (status pages).
 - Button/LED interaction.
 - Registration handshake (per parallel-team protocol — see §9.4).
 
 The firmware does **not** own:
 - Threshold logic for clinical alerts (lives on Radxa).
-- Filtering of mmWave "ghost" readings (lives on Radxa — publish raw + quality field).
 - Face recognition (lives on Radxa, gated by radar presence).
 - Any FHIR translation (Radxa).
 - Persistent vitals storage (Radxa, with delivery-buffer semantics; firmware

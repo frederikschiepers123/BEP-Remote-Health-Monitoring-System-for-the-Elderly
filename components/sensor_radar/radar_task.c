@@ -2,6 +2,7 @@
 #include "log.h"
 
 #include "radar_driver.h"
+#include "radar_filter.h"
 #include "board_pico2wh.h"
 #include "app_config.h"
 #include "err.h"
@@ -56,28 +57,42 @@ void radar_task(void *arg)
 
     LOG_I("Radar task started, driver=%s", drv->name);
 
+    /* MCU-side plausibility filter (ADR-0005): debounce presence, gate +
+     * smooth distance/vitals.  Applied on the generic RadarSample, above the
+     * driver v-table, so it is driver-agnostic. */
+    static RadarFilter filt;
+    radar_filter_init(&filt);
+
     uint32_t seq     = 0;
     uint32_t dropped = 0;
 
     for (;;) {
         wdt_task_alive(WDT_TASK_RADAR);
 
-        RadarSample sample;
+        RadarSample raw;
         /* read_sample blocks for up to 500 ms waiting for data */
-        err = drv->read_sample(drv->ctx, &sample, 500U);
-        if (err == ERR_TIMEOUT) {
-            /* No frame within 500 ms — normal for slow-update radars */
-            LOG_D("Radar read timeout (no frame in 500 ms)");
-            continue;
-        }
+        err = drv->read_sample(drv->ctx, &raw, 500U);
         if (err != ERR_OK) {
-            LOG_W("Radar read error: %d", err);
-            sample.presence    = false;
-            sample.distance_mm = 0;
-            sample.breath_rpm  = 0.0f;
-            sample.heart_bpm   = 0.0f;
-            sample.q           = 3;
+            if (err == ERR_TIMEOUT) {
+                /* No frame in 500 ms — still clock the filter below so its
+                 * absence / input-timeout windows keep counting (ADR-0005).
+                 * Skipping here would freeze the filter at its last state
+                 * (e.g. presence=true with held vitals) across a radar
+                 * outage, and let it resume that state on recovery. */
+                LOG_D("Radar read timeout (no frame in 500 ms)");
+            } else {
+                LOG_W("Radar read error: %d", err);
+            }
+            raw.presence    = false;
+            raw.distance_mm = 0;
+            raw.breath_rpm  = 0.0f;
+            raw.heart_bpm   = 0.0f;
+            raw.q           = 3;
         }
+
+        RadarSample sample;
+        radar_filter_apply(&filt, &raw,
+                           to_ms_since_boot(get_absolute_time()), &sample);
 
         /* Non-blocking enqueue */
         if (xQueueSendToBack(q_radar, &sample, 0) != pdTRUE) {

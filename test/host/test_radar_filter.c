@@ -1,0 +1,268 @@
+/* Host unit tests for the MCU-side radar plausibility filter (ADR-0005).
+ *
+ * Pure-logic module: we drive radar_filter_apply() with synthetic RadarSample
+ * sequences at the real 1 Hz cadence and assert the gate/confirm/reset
+ * behaviour ported from the supervisor's reference filter:
+ *   - presence debounce: 10 s to confirm, 2 s to drop
+ *   - distance gate 350–1500 mm, 6 s confirm, >200 mm jump restarts
+ *   - vitals only after presence AND distance stable; 10 s confirm;
+ *     implausible values (heart outside 45–125) never lock
+ *   - heart output carries the -RADAR_HEART_CAL_OFFSET_BPM calibration
+ *   - q: 0 stable-or-empty, 2 validating, 3 invalid-with-nothing-held
+ */
+
+#include <stdarg.h>
+#include <stddef.h>
+#include <setjmp.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <math.h>
+#include <stdio.h>
+#include "cmocka.h"
+
+#include "host_stubs.h"
+#include "radar_filter.h"
+
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+
+static RadarSample mk(bool pres, uint32_t dist_mm, float heart, float breath,
+                      uint8_t q)
+{
+    RadarSample s;
+    s.presence    = pres;
+    s.distance_mm = dist_mm;
+    s.heart_bpm   = heart;
+    s.breath_rpm  = breath;
+    s.q           = q;
+    return s;
+}
+
+/* Feed `raw` n times at 1 Hz starting at *t; advances *t; returns last out. */
+static RadarSample feed(RadarFilter *f, const RadarSample *raw, int n,
+                        uint32_t *t)
+{
+    RadarSample out;
+    memset(&out, 0, sizeof(out));
+    for (int i = 0; i < n; i++) {
+        radar_filter_apply(f, raw, *t, &out);
+        *t += 1000u;
+    }
+    return out;
+}
+
+static bool feq(float a, float b) { return fabsf(a - b) < 0.05f; }
+
+/* ── tests ───────────────────────────────────────────────────────────────── */
+
+/* Presence needs 10 s of evidence; before that q=2 (validating). */
+static void test_presence_debounce(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample person = mk(true, 600, 0.0f, 0.0f, 2);
+
+    /* 10 samples = evidence from t..t+9000 < 10 s confirm — not yet present */
+    RadarSample out = feed(&f, &person, 10, &t);
+    assert_false(out.presence);
+    assert_int_equal(out.q, 2);            /* warming up, not "empty" */
+
+    /* the 11th sample (t0+10000) crosses the confirm window */
+    out = feed(&f, &person, 1, &t);
+    assert_true(out.presence);
+
+    /* absence: 2 s of no evidence drops presence and yields q=0 (empty) */
+    RadarSample empty = mk(false, 0, 0.0f, 0.0f, 0);
+    out = feed(&f, &empty, 3, &t);
+    assert_false(out.presence);
+    assert_int_equal(out.q, 0);
+}
+
+/* Distance stabilises after 6 s in-gate; out-of-gate never; jump restarts. */
+static void test_distance_gate_confirm_jump(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 800, 0.0f, 0.0f, 2);
+    RadarSample out = feed(&f, &s, 6, &t);     /* 0..5000 ms < 6 s confirm */
+    assert_int_equal(out.distance_mm, 0);      /* still validating */
+
+    out = feed(&f, &s, 1, &t);                 /* t0+6000 — confirmed */
+    assert_int_equal(out.distance_mm, 800);
+
+    /* >200 mm jump restarts validation */
+    RadarSample jumped = mk(true, 1200, 0.0f, 0.0f, 2);
+    out = feed(&f, &jumped, 1, &t);
+    assert_int_equal(out.distance_mm, 0);
+
+    /* out-of-gate (>1500 mm) never stabilises */
+    radar_filter_init(&f);
+    t = 1000;
+    RadarSample far = mk(true, 2500, 0.0f, 0.0f, 2);
+    out = feed(&f, &far, 20, &t);
+    assert_int_equal(out.distance_mm, 0);
+}
+
+/* Vitals lock only after presence (10 s) AND distance (6 s) are stable,
+ * then their own 10 s confirm — and the heart output is offset-calibrated. */
+static void test_vitals_lock_and_heart_offset(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+
+    /* t0..t0+9000: gates still confirming — no vitals */
+    RadarSample out = feed(&f, &s, 10, &t);
+    assert_true(feq(out.heart_bpm, 0.0f));
+    assert_true(feq(out.breath_rpm, 0.0f));
+    assert_int_equal(out.q, 2);
+
+    /* t0+10000: gates open; vitals start their own confirm window */
+    out = feed(&f, &s, 10, &t);                /* ..t0+19000: confirming */
+    assert_true(feq(out.heart_bpm, 0.0f));
+    assert_int_equal(out.q, 2);                /* present, vitals not locked */
+
+    out = feed(&f, &s, 1, &t);                 /* t0+20000: vitals stable */
+    assert_true(feq(out.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+    assert_true(feq(out.breath_rpm, 15.0f));
+    assert_int_equal(out.q, 0);
+    assert_true(out.presence);
+    assert_int_equal(out.distance_mm, 600);
+}
+
+/* Implausible heart rate (outside 45–125 BPM) must never lock. */
+static void test_implausible_heart_rejected(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 160.0f, 15.0f, 0);
+    RadarSample out = feed(&f, &s, 30, &t);    /* way past all windows */
+
+    assert_true(feq(out.heart_bpm, 0.0f));     /* rejected forever */
+    assert_true(feq(out.breath_rpm, 15.0f));   /* breath (valid) locked fine */
+    assert_int_equal(out.q, 0);                /* one stable vital ⇒ ok */
+}
+
+/* A vital jump beyond max_jump drops it back to validating. */
+static void test_vital_jump_resets(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarSample out = feed(&f, &s, 21, &t);    /* locked (see above) */
+    assert_true(out.heart_bpm > 0.0f);
+
+    RadarSample spike = mk(true, 600, 115.0f, 15.0f, 0);   /* +15 > 8 jump */
+    out = feed(&f, &spike, 1, &t);
+    assert_true(feq(out.heart_bpm, 0.0f));     /* back to validating */
+    assert_int_equal(out.q, 0);                /* breath still stable */
+}
+
+/* Losing presence resets vitals even if stale vitals keep being latched. */
+static void test_absence_resets_vitals(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarSample out = feed(&f, &s, 21, &t);
+    assert_true(out.heart_bpm > 0.0f);
+
+    /* person leaves; driver still reports last latched vitals briefly */
+    RadarSample gone = mk(false, 0, 100.0f, 15.0f, 0);
+    out = feed(&f, &gone, 3, &t);              /* > 2 s absence */
+    assert_false(out.presence);
+    assert_true(feq(out.heart_bpm, 0.0f));
+    assert_true(feq(out.breath_rpm, 0.0f));
+}
+
+/* A vital whose input stream stops (person present, chip stops producing
+ * heart frames) must expire via its input timeout and re-confirm afterwards. */
+static void test_vital_input_timeout_expires(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarSample out = feed(&f, &s, 21, &t);          /* heart locked */
+    assert_true(out.heart_bpm > 0.0f);
+
+    /* heart frames stop; presence + distance + breath keep flowing */
+    RadarSample no_heart = mk(true, 600, 0.0f, 15.0f, 0);
+    out = feed(&f, &no_heart, 8, &t);                /* > 6 s heart timeout */
+    assert_true(feq(out.heart_bpm, 0.0f));           /* expired */
+    assert_true(feq(out.breath_rpm, 15.0f));         /* unaffected */
+
+    /* heart returns: must re-confirm for 10 s, not relock instantly */
+    out = feed(&f, &s, 5, &t);
+    assert_true(feq(out.heart_bpm, 0.0f));           /* still validating */
+    out = feed(&f, &s, 7, &t);                       /* past 10 s confirm */
+    assert_true(out.heart_bpm > 0.0f);
+}
+
+/* After a long gap in apply() calls, the first sample must NOT be instantly
+ * stable — the stale candidate has to expire first (expire-before-update). */
+static void test_feed_gap_not_instantly_stable(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 800, 0.0f, 0.0f, 2);
+    RadarSample out = feed(&f, &s, 7, &t);           /* distance confirmed */
+    assert_int_equal(out.distance_mm, 800);
+
+    t += 8000;                                       /* 8 s with NO apply() */
+    out = feed(&f, &s, 1, &t);
+    assert_int_equal(out.distance_mm, 0);            /* must re-validate */
+}
+
+/* Invalid input with nothing held passes q=3 through. */
+static void test_invalid_passthrough(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample bad = mk(false, 0, 0.0f, 0.0f, 3);
+    RadarSample out = feed(&f, &bad, 3, &t);
+    assert_int_equal(out.q, 3);
+    assert_false(out.presence);
+}
+
+int main(void)
+{
+    const struct CMUnitTest tests[] = {
+        cmocka_unit_test(test_presence_debounce),
+        cmocka_unit_test(test_distance_gate_confirm_jump),
+        cmocka_unit_test(test_vitals_lock_and_heart_offset),
+        cmocka_unit_test(test_implausible_heart_rejected),
+        cmocka_unit_test(test_vital_jump_resets),
+        cmocka_unit_test(test_absence_resets_vitals),
+        cmocka_unit_test(test_vital_input_timeout_expires),
+        cmocka_unit_test(test_feed_gap_not_instantly_stable),
+        cmocka_unit_test(test_invalid_passthrough),
+    };
+    return cmocka_run_group_tests(tests, NULL, NULL);
+}

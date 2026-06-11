@@ -1,6 +1,7 @@
 add_library(sensor_radar STATIC
     radar_select.c
     radar_bha2.c
+    radar_filter.c
     radar_task.c
 )
 

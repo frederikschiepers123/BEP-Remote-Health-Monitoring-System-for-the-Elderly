@@ -53,4 +53,5 @@ add_host_test(test_aht21       components/sensor_env/aht21.c)      # AHT21/AHT20
 add_host_test(test_bh1750      components/sensor_light/bh1750.c)   # BH1750 lux conversion
 add_host_test(test_ens160      components/sensor_air/ens160.c)     # ENS160 validity + decode
 add_host_test(test_radar_bha2  components/sensor_radar/radar_bha2.c) # MR60BHA2 frame parser
+add_host_test(test_radar_filter components/sensor_radar/radar_filter.c) # ADR-0005 plausibility filter
 add_host_test(test_spool       components/spool/spool.c)            # NV outbound FIFO (ADR-0003)

@@ -40,6 +40,7 @@
 #include "light_driver.h"
 #include "sh1122.h"
 #include "radar_driver.h"
+#include "radar_filter.h"
 #include "err.h"
 
 #include "hardware/i2c.h"
@@ -582,8 +583,18 @@ static void publish_radar_sample(void)
 
     /* Snapshot the latched sample. memcpy through volatile copies is fine
      * here — RadarSample is plain old data. */
+    RadarSample raw;
+    memcpy(&raw, (const void *)&s_radar_latched, sizeof(raw));
+
+    /* MCU-side plausibility filter (ADR-0005): debounced presence, gated +
+     * smoothed distance/vitals.  Same filter as the production radar_task.
+     * Fed at this 1 Hz publish cadence — all its windows are in seconds. */
+    static RadarFilter s_filt;
+    static bool s_filt_init = false;
+    if (!s_filt_init) { radar_filter_init(&s_filt); s_filt_init = true; }
     RadarSample s;
-    memcpy(&s, (const void *)&s_radar_latched, sizeof(s));
+    radar_filter_apply(&s_filt, &raw,
+                       (uint32_t)(time_us_64() / 1000u), &s);
     uint8_t q = s.q;
 
     char payload[256];
@@ -605,7 +616,9 @@ static void publish_radar_sample(void)
     if (pe != ERR_OK) {
         printf("[bringup] radar mqtt_publish immediate rc=%d\n", (int)pe);
     }
-    if (q == 0) {
+    if (q != 3) {
+        /* q==2 = filter still validating (ADR-0005) — print it too so the
+         * console shows the confirm windows progressing, not just the lock. */
         printf("[bringup] radar pres=%d dist=%lumm BR=%.1f HR=%.1f q=%u seq=%u\n",
                (int)s.presence, (unsigned long)s.distance_mm,
                (double)s.breath_rpm, (double)s.heart_bpm, q,

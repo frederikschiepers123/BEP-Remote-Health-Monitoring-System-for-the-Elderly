@@ -292,6 +292,7 @@ add_executable(bringup_sensors
     sensors_publish.c
     ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
     ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_filter.c
     ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
 )
 target_include_directories(bringup_sensors BEFORE PRIVATE
@@ -334,6 +335,7 @@ add_executable(bringup_sensors_slow
     sensors_publish.c
     ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
     ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_filter.c
     ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
 )
 target_include_directories(bringup_sensors_slow BEFORE PRIVATE
