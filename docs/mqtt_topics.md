@@ -1,10 +1,21 @@
 # MQTT Topic and Payload Schema
 
-**Authoritative reference for all topics published or subscribed to by the sensor-module firmware.**
+> ⚠️ **STALE — parts of this file predate current decisions.** The authoritative
+> contract is **CLAUDE.md §9.1/§9.2 (topics + JSON payloads), §9.6 (FHIR), and
+> the ADRs.** Specifically, this file still says payloads are CBOR and lists IR
+> camera topics — both are wrong now: **the wire format is JSON** (RFC 8259, see
+> CLAUDE.md §9.2; CBOR was reversed) and **there is no IR camera** (dropped, §17).
+> Commands are JSON, not CBOR maps. A full rewrite of this file is tracked
+> separately; until then defer to CLAUDE.md. New since ADR-0003: `time/set` is
+> subscribed and all uplink topics are delivered with at-least-once retry from
+> the flash spool (may be delayed / re-sent after an outage — consumers dedup on
+> `seq`).
+
+**Reference for topics published or subscribed to by the sensor-module firmware.**
 
 All topics are rooted at `rmms/<uuid>/...` where `<uuid>` is the device UUID from the factory-provisioned identity (36-character UUIDv4 string).
 
-Payloads are **CBOR** (RFC 8949) unless otherwise noted.  JSON is not used in this firmware.
+Payloads are **JSON** (RFC 8259) per CLAUDE.md §9.2.  (This file's per-topic CBOR examples below are outdated; the field names and semantics still hold, only the encoding changed.)
 
 ---
 
@@ -19,7 +30,10 @@ Payloads are **CBOR** (RFC 8949) unless otherwise noted.  JSON is not used in th
 | `rmms/<uuid>/ir/frame` | publish | 1 | no | Binary IR frame payload |
 | `rmms/<uuid>/status` | publish | 1 | **yes** | `"online"` / `"offline"` (LWT) |
 | `rmms/<uuid>/cmd` | subscribe | 1 | — | Commands from Radxa (see below) |
+| `rmms/<uuid>/time/set` | subscribe | 1 | — | Tablet wall-clock sync `{"epoch_ms":…}` (§9.2.5; ADR-0003) |
 | `rmms/<uuid>/log` | publish | 0 | no | Critical log lines (text, best-effort) |
+
+> Note: the IR topics (`ir/meta`, `ir/frame`) above are obsolete — no IR camera exists in v1 (CLAUDE.md §17). All `publish` sensor topics are delivered with at-least-once QoS-1 retry from the non-volatile spool (ADR-0003).
 
 ---
 

@@ -53,6 +53,7 @@ target_include_directories(littlefs PUBLIC third_party/littlefs)
 add_subdirectory(components/board)
 add_subdirectory(components/log)
 add_subdirectory(components/storage)
+add_subdirectory(components/spool)
 add_subdirectory(components/json)
 add_subdirectory(components/identity)
 add_subdirectory(components/cfg)
@@ -79,7 +80,7 @@ add_subdirectory(main)
 # per-source-file to each target's own declared sources. board is INTERFACE
 # (header-only) and has nothing to compile.
 foreach(_tgt
-    log storage json identity
+    log storage spool json identity
     sensor_env sensor_air sensor_radar sensor_light
     ui_oled ui_input
     sensor_module)

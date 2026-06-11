@@ -34,12 +34,18 @@ The Android tablet serves **two roles simultaneously**:
    raw topics are the contract, and the mirror is one of several
    subscribers.
 
-This repository implements **only** the sensor-module firmware. The tablet
-broker configuration, the MagicMirror² installation and `MMM-SensorUI`
-module, the USB-MQTT bridge, the Radxa aggregation service, and the FHIR
-translator live in separate repositories (the MagicMirror² tree currently
-sits under `MagicMirror/` in this repo as a temporary convenience; it
-should be factored out before v1 is shipped).
+This repository's **firmware** (the repo root: `main/`, `components/`, etc.) is
+the sensor-module firmware **only**. The tablet broker configuration, the
+MagicMirror² installation and `MMM-SensorUI` module, and the USB-MQTT bridge live
+in separate repositories (the MagicMirror² tree currently sits under
+`MagicMirror/` here as a temporary convenience; factor it out before v1).
+
+The **Radxa aggregation service + FHIR translator** now lives **in this monorepo
+under `sbc/`** — a standalone Python project (its own `sbc/CLAUDE.md`) that the
+firmware build never compiles or links. This colocation does not weaken the §9.6
+rule: there is still **no FHIR/medical code on the MCU**; `sbc/` simply isn't part
+of the firmware image. See `docs/sbc-failover-and-idempotency.md` for the
+cross-tier contract.
 
 A previous BAP group built a working MicroPython firmware on a Lilygo TQ-T Pro
 (ESP32-S3). **That code is reference material only, not a starting point.** Treat
@@ -154,7 +160,10 @@ The firmware does **not** own:
 - Face recognition (lives on Radxa, gated by radar presence).
 - Any FHIR translation (Radxa).
 - Persistent vitals storage (Radxa, with delivery-buffer semantics; firmware
-  retains only an in-RAM ring buffer for retry over the active transport).
+  retains a **non-volatile flash spool** for loss-tolerant retry over the active
+  transport — a FIFO buffer of ≥15 min, QoS-1 retry-until-PUBACK, surviving
+  outages and power loss. See ADR-0003. This supersedes the earlier "in-RAM ring
+  buffer" plan, which would not have survived a power cut.).
 
 ---
 
@@ -296,6 +305,7 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   ├── ui_oled/                  # SH1122 driver + 4-page UI state machine
 │   ├── ui_input/                 # buttons + LEDs
 │   ├── transport_mqtt/           # transport_task: Wi-Fi → lwIP altcp_tls → MQTT
+│   ├── spool/                    # non-volatile flash FIFO for loss-tolerant uplink (ADR-0003)
 │   ├── identity/                 # loads cert+key from littlefs, exposes UUID
 │   ├── storage/                  # littlefs mount + KV API
 │   ├── json/                     # snprintf encoders + jsmn-style tokenizer
@@ -337,7 +347,7 @@ FreeRTOS SMP, both M33 cores enabled, tickless idle off (we are always mains-pow
 | `radar_task`      | Core 1        | 4        | 4 KB   | UART RX, frame parsing               |
 | `light_task`      | Any           | 3        | 1 KB   | BH1750 I²C read at 0.2 Hz (continuous H-res; lux barely moves at 1 Hz) |
 | `ui_task`         | Core 0        | 2        | 4 KB   | OLED redraw on button or 1 Hz        |
-| `transport_task`  | Core 0        | 5        | 6 KB   | Wi-Fi + altcp_tls + lwIP MQTT (`transport_mqtt`); sole consumer of the producer queues |
+| `transport_task`  | Core 0        | 5        | 16 KB  | Wi-Fi + altcp_tls + lwIP MQTT (`transport_mqtt`); sole consumer of the producer queues. Ingests every sample into the NV flash spool (ADR-0003) and drains it to the broker (QoS-1 retry-until-PUBACK); also owns time-sync (`time/set`). ~10 Hz pump. |
 
 Priorities: higher numeric = higher priority. `transport_task` is the highest-
 priority worker because losing the link is the only failure mode that matters.
@@ -456,6 +466,14 @@ not a deferral. (Developer logging still uses a standalone USB-serial console,
 - Keepalive 60 s on Wi-Fi.
 - Last-Will-and-Testament on `rmms/<uuid>/status` with payload `"offline"`
   (retained, QoS 1); `"online"` published retained on each CONNACK.
+- **Loss-tolerant delivery (ADR-0003):** every sample is first persisted to the
+  non-volatile flash spool (`components/spool`); the task drains the spool FIFO
+  and clears a record only on its QoS-1 PUBACK, retrying across reconnects. An
+  outage (or power loss) loses nothing up to the spool's ≥15 min capacity;
+  overflow drops the OLDEST records and logs it (§13.6).
+- **Time-sync:** the task subscribes to `rmms/<uuid>/time/set` (§9.2.5) and
+  stamps each record's `wall_ms` from the tablet-supplied clock (`-1` until the
+  first sync). Resolves §16-Q6. No NTP-from-WAN.
 
 ---
 
@@ -871,6 +889,18 @@ The Radxa **never silently drops** an invalid sample. This matches §13.6 — th
 previous group's `except: pass` pattern is rejected at every layer of the
 system, not only the MCU.
 
+**End-to-end loss-tolerance + idempotency (cross-tier).** The firmware now
+guarantees its half: every sample is held in a non-volatile flash FIFO
+(`components/spool`, ADR-0003), delivered QoS-1 retry-until-PUBACK, and carries a
+`seq` that is stable across re-sends and monotonic-with-gaps across reboots. The
+SBC's `Observation.identifier = urn:rmms:seq | <uuid>-<sensor>-<seq>` (the
+`seq → identifier` row above) therefore dedups correctly even across a firmware
+reboot, and the SBC's own ≥24 h SQLite store-and-forward queue + conditional
+`PUT ?identifier=` posting handle a cloud/FHIR-endpoint outage. The full
+three-tier contract — firmware spool, the 24 h SBC queue, the LOINC/SNOMED
+mapping, and the server-side update-or-ignore requirement — is documented in
+`docs/sbc-failover-and-idempotency.md`.
+
 ---
 
 ## 10. Security model
@@ -948,10 +978,23 @@ system, not only the MCU.
 
 ## 11. Persistent storage
 
-`littlefs` mounted on a 256 KB region at the top of QSPI flash. **All
+**Flash partition map** (4 MB QSPI, regions carved from the top; the firmware
+image lives at the bottom). The single source of truth is
+`components/board/flash_map.h`, included by both `storage.c` and `spool.c` with a
+`static_assert` that the regions tile exactly:
+
+| Region        | Size   | Offset (4 MB part) | Owner | Purpose |
+| ------------- | ------ | ------------------ | ----- | ------- |
+| firmware image | ~0.5 MB | `0x000000` ↑       | linker | `.text`/`.rodata`/`.data` |
+| **spool**     | 1 MB   | `0x2C0000`         | `components/spool` | NV outbound FIFO (ADR-0003) |
+| **littlefs**  | 256 KB | `0x3C0000`         | `components/storage` | `/cfg /certs /state` |
+
+`littlefs` is mounted on the top 256 KB; the spool is the 1 MB immediately below
+it (one 256-byte flash page per record, whole-sector erase). **All
 firmware-managed config and state files are JSON** — same format as the wire
 payloads (§9.2). Cert artefacts retain their cryptographic encodings
-(DER/PEM) because those are dictated by X.509, not by us.
+(DER/PEM) because those are dictated by X.509, not by us. (The spool is *not*
+littlefs — it is a raw circular log; see ADR-0003.)
 
 ```
 /cfg/
@@ -1223,13 +1266,13 @@ Resolve each, then strip the TODO.
    which bridge the mirror uses; the bridge just needs to honour the mTLS
    contract (mirror cert from §10.2) and forward the raw `rmms/+/...`
    topics to `MMM-SensorUI`.
-6. **RTC source.** None on the Pico 2; either get time from the tablet during
-   connect (custom MQTT topic, e.g. `rmms/<uuid>/time/set`, or out-of-band over
-   CDC1), or accept that `wall_ms` is null until first sync. Pick one. The
-   audit notes the previous group's NTP-from-WAN approach failed catastrophically
-   when NTP was unreachable — do not repeat that pattern. **This also affects
-   FHIR (§9.6):** without a real `wall_ms`, every Observation the Radxa builds
-   will be `status: preliminary`. Resolve early.
+6. ~~**RTC source.**~~ **Resolved (ADR-0003).** Time comes from the tablet via
+   `rmms/<uuid>/time/set` ({"epoch_ms":…}, §9.2.5): `transport_task` subscribes
+   on CONNACK, maintains a wall-clock offset, and stamps each spooled record's
+   `wall_ms` at ingest. Before the first sync `wall_ms` is the `-1` sentinel and
+   the Radxa substitutes a receive-time estimate (§9.6). No NTP-from-WAN (the
+   audit's failure mode). The tablet publishes `time/set` per-device on connect
+   (see `docs/CLAUDE_radxa.md` §17-Q5).
 7. **Project CA hosting.** Where does the CA private key live? Air-gapped
    workstation, HSM, or YubiKey? Who has access? What is the procedure for
    re-signing if a device cert is lost or compromised? **The audit shows the
@@ -1251,6 +1294,14 @@ Resolve each, then strip the TODO.
    against the live tablet broker. This is bring-up step 12.
 
 **Resolved since last revision:**
+- **Loss-tolerant uplink — NV flash spool + time-sync (ADR-0003):** every sample
+  is persisted to a non-volatile 1 MB flash FIFO (`components/spool`) before
+  publishing, delivered QoS-1 retry-until-PUBACK, and stamped with a real
+  `wall_ms` from tablet `time/set`. Survives Wi-Fi/broker outages and power loss
+  (≥15 min capacity); resolves §16-Q6. `seq` is now persisted across reboots
+  (monotonic-with-gaps) so the SBC's `Observation.identifier` dedup is correct.
+  New component `components/spool`, new `flash_map.h`, reworked `transport_task`.
+  See also `docs/sbc-failover-and-idempotency.md` for the end-to-end contract.
 - **USB-CDC transport dropped from v1 (ADR-0002):** Wi-Fi is the sole
   transport, on the lwIP-native `altcp_tls` + `pico_lwip_mqtt` path. The
   USB-CDC-era custom `stream_t` stack (`transport_usb`, `transport_selector`,

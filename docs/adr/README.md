@@ -25,6 +25,8 @@ What becomes easier or harder?
 | # | Title | Status |
 |---|-------|--------|
 | [0001](0001-light-sensor-bh1750.md) | Replace GL5516 LDR with Rohm BH1750FVI for ambient light | Accepted |
+| [0002](0002-wifi-sole-transport.md) | Wi-Fi is the sole v1 transport — USB-CDC dropped | Accepted |
+| [0003](0003-nv-flash-spool-and-time-sync.md) | Non-volatile flash spool + tablet time-sync (lossless uplink) | Accepted |
 
 ## When to write an ADR
 
