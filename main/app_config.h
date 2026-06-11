@@ -45,12 +45,14 @@
  * callback). The ui task is network-inert (OLED over I²C only) so it runs
  * during bring-up — to render the diagnostic — without contending the context.
  *
- * cyw43_arch_wifi_connect_timeout_ms legitimately fails on transient conditions
- * (rc=-2 NONET: beacon not seen yet), so the connect is retried a bounded number
- * of times. rc=-7 (BADAUTH, wrong PSK) is terminal — we stop retrying on it. */
-#define WIFI_CONNECT_ATTEMPTS       4U      /* total association attempts        */
+ * cyw43_arch_wifi_connect_timeout_ms legitimately fails on transient conditions:
+ * rc=-2 NONET (beacon not yet seen) and — observed on consumer routers/hotspots —
+ * rc=-8 CONNECT_FAILED that only succeeds after ~5 retries (the AP rejects the
+ * first several joins). So retry generously; the failed attempts return fast.
+ * rc=-7 (BADAUTH, wrong PSK) is terminal — we stop retrying on it. */
+#define WIFI_CONNECT_ATTEMPTS       20U     /* total attempts (flaky-AP headroom) */
 #define WIFI_CONNECT_TIMEOUT_MS     30000U  /* per-attempt cyw43 connect timeout */
-#define WIFI_CONNECT_RETRY_DELAY_MS 2000U   /* backoff between attempts          */
+#define WIFI_CONNECT_RETRY_DELAY_MS 1000U   /* backoff between attempts          */
 
 /* ── Watchdog task IDs ───────────────────────────────────────────────────── */
 
