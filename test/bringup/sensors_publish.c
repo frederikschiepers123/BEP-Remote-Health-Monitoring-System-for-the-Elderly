@@ -653,8 +653,11 @@ static void discrete_gpio_init(void)
 
     gpio_init(BOARD_BTN_DISPLAY_PIN);
     gpio_set_dir(BOARD_BTN_DISPLAY_PIN, GPIO_IN);
-    /* External 1 kΩ pull-up is in place per the schematic; no internal
-     * pull-up needed. */
+    /* Enable the internal pull-up so the button works without the external
+     * 1 kΩ pull-up (not populated on the breadboard).  At rest GP16 reads
+     * HIGH; pressing shorts it to GND (active-low) → the HIGH→LOW edge fires.
+     * Harmless if an external pull-up is also present (parallel). */
+    gpio_pull_up(BOARD_BTN_DISPLAY_PIN);
     printf("[bringup] discrete GPIO init: PWR_LED=GP%d on, WIFI_LED=GP%d off, "
            "SW2=GP%d (active-low)\n",
            BOARD_LED_POWER_PIN, BOARD_LED_WIFI_PIN, BOARD_BTN_DISPLAY_PIN);
@@ -1005,6 +1008,12 @@ static void sensors_task(void *arg)
 
     printf("[bringup] UUID = %s\n", g_id.uuid);
     printf("[bringup] broker = %s:%u\n", broker_addr_str(), (unsigned)g_broker.port);
+    /* DIAGNOSTIC: show exactly what creds were loaded from littlefs (ssid in
+     * full, psk length only — never the psk).  rc=-8 link-fail means the AP
+     * rejected the join; if ssid is right but the psk length is wrong, the
+     * stored credential is the problem (provisioning), not the radio. */
+    printf("[bringup] loaded wifi: ssid='%s' (ssid_len=%u, psk_len=%u)\n",
+           g_wifi.ssid, (unsigned)strlen(g_wifi.ssid), (unsigned)strlen(g_wifi.psk));
 
     /* ── Discrete GPIO + I²C + sensor probes (independent of network) ── */
     discrete_gpio_init();
@@ -1064,15 +1073,28 @@ static void sensors_task(void *arg)
     }
     cyw43_arch_enable_sta_mode();
     printf("[bringup] connecting to SSID '%s' ...\n", g_wifi.ssid);
-    int rc = cyw43_arch_wifi_connect_timeout_ms(g_wifi.ssid, g_wifi.psk,
+    /* Bounded retry: this router intermittently REJECTS the first several joins
+     * with rc=-8 CONNECT_FAILED ("joining → link fail") and only accepts after
+     * ~5 retries (observed: bringup_wifi failed 4× then connected). So retry
+     * generously. rc=-7 (BADAUTH) is terminal (wrong PSK); stop on it. */
+    enum { WIFI_MAX_ATTEMPTS = 20 };
+    int rc = -1;
+    for (int attempt = 1; attempt <= WIFI_MAX_ATTEMPTS; attempt++) {
+        printf("[bringup] connect attempt %d/%d ...\n", attempt, WIFI_MAX_ATTEMPTS);
+        rc = cyw43_arch_wifi_connect_timeout_ms(g_wifi.ssid, g_wifi.psk,
                                                 CYW43_AUTH_WPA2_AES_PSK, 30000);
+        if (rc == 0) { break; }
+        /* rc=-7 BADAUTH wrong password; rc=-8 CONNECT_FAILED AP rejected
+         * (transient on this router); rc=-2 NONET SSID not visible. */
+        printf("[bringup] connect attempt %d FAILED rc=%d\n", attempt, rc);
+        if (rc == -7) { break; }   /* wrong password — retrying cannot help */
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
     if (rc != 0) {
         /* Non-fatal: keep going so sensor reads + OLED + serial console all
          * still work. mqtt_setup_and_connect is skipped below; the publish
-         * helpers check g_wifi_ok and just printf the sample.
-         * rc=-7 BADAUTH wrong password; rc=-8 CONNECT_FAILED AP rejected
-         * (often 5 GHz-only / WPA3-only); rc=-2 NONET SSID not visible. */
-        printf("[bringup] wifi connect FAILED rc=%d — continuing in sensor-only mode\n", rc);
+         * helpers check g_wifi_ok and just printf the sample. */
+        printf("[bringup] wifi connect gave up rc=%d — continuing in sensor-only mode\n", rc);
         g_wifi_ok = false;
     } else {
         g_wifi_ok = true;
