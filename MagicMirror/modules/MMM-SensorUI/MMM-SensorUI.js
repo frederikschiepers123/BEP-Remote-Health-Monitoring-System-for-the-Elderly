@@ -63,7 +63,16 @@ Module.register("MMM-SensorUI", {
     this.airQuality = "...";
     this.airQualityTL = "green";
 
-    this.infoMessage = "Don't forget to take your medicine at 5 o'clock";
+    /* Operator message (rmms/<uuid>/info → sensors/infomessage).  Empty until
+     * one arrives — the footer's default content is the last-reading
+     * timestamp (supervisor feedback), not a static placeholder. */
+    this.infoMessage = "";
+
+    /* Timestamp of the most recently received sensor reading (any data
+     * topic: vitals or environment).  Rendered in the footer; freezes when
+     * the device stops publishing, which makes an outage visible at a
+     * glance. */
+    this.lastReadingAt = null;
 
   },
 
@@ -228,7 +237,22 @@ Module.register("MMM-SensorUI", {
 
     const infoText = document.createElement("div");
     infoText.className = "infoText";
-    infoText.innerHTML = this.infoMessage;
+
+    /* Footer content (supervisor feedback): always show WHEN the last sensor
+     * reading was received; an operator info message (if any) is shown above
+     * it.  A frozen timestamp = the device stopped publishing. */
+    const lastReadingLine = this.lastReadingAt
+      ? "Last reading: " + this.lastReadingAt.toLocaleTimeString()
+      : "Waiting for sensor data…";
+
+    if (this.infoMessage) {
+      infoText.innerHTML =
+        this.infoMessage +
+        '<br><span style="font-size:0.75em;opacity:0.7;">' +
+        lastReadingLine + "</span>";
+    } else {
+      infoText.innerHTML = lastReadingLine;
+    }
 
     infoWrapper.appendChild(infoIcon);
     infoWrapper.appendChild(infoText);
@@ -253,6 +277,16 @@ notificationReceived: function(notification, payload, sender) {
       if (notification === "MQTT_SENSOR_UPDATE") {
 
           console.log("SensorUI received:", payload);
+
+          /* Any actual sensor reading (vitals or environment) refreshes the
+           * footer timestamp.  Operator messages and the broker status are
+           * not readings — they must not mask a silent device. */
+          if (payload.topic &&
+              payload.topic.indexOf("sensors/") === 0 &&
+              payload.topic !== "sensors/infomessage" &&
+              payload.topic !== "sensors/status") {
+              this.lastReadingAt = new Date();
+          }
 
           // Example topic handling
           if (payload.topic === "sensors/heartrate") {
