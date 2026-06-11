@@ -2,33 +2,17 @@
 #define LWIPOPTS_H
 
 /* ── OS integration ───────────────────────────────────────────────────────── */
-#define NO_SYS                          0   /* FreeRTOS mode */
-#define LWIP_SOCKET                     1
+/* NO_SYS=1 + pico_cyw43_arch_lwip_threadsafe_background — the hardware-proven
+ * model (the bring-up runs the full Wi-Fi + mTLS + MQTT + sensors path on it).
+ * The NO_SYS=0 / sys_freertos path got cyw43_arch_init working (the mailbox
+ * fix below, kept in history) but cyw43_arch_wifi_connect then DEADLOCKED on
+ * this pico-sdk rev — cyw43 is not SMP-clean here. So the firmware uses
+ * threadsafe_background and pins every task to core 0 (app_main.c); lwIP is
+ * serviced by the cyw43 background poll, guarded by cyw43_arch_lwip_begin/end.
+ * No tcpip thread, no mailboxes, no core locking. */
+#define NO_SYS                          1
+#define LWIP_SOCKET                     0
 #define LWIP_NETCONN                    0
-
-/* ── lwIP TCP/IP thread + mailboxes (REQUIRED when NO_SYS=0) ────────────────
- * With NO_SYS=0 lwIP runs its own tcpip thread and creates FreeRTOS-queue
- * mailboxes. lwIP defaults every *_MBOX_SIZE to 0; the FreeRTOS sys_arch's
- * sys_mbox_new() then asserts "size > 0" (lwip/contrib/ports/freertos/
- * sys_arch.c). Under NDEBUG that assert is compiled out, xQueueCreate(0,…)
- * returns NULL, tcpip_init() fails, and cyw43_arch_init() never returns — the
- * long-standing "sys_freertos hangs in cyw43_arch_init". Defining these >0
- * is the fix. (The bring-up's NO_SYS=1 threadsafe_background lwipopts has no
- * tcpip thread and intentionally omits these.) Priorities live below the
- * timer task (configMAX_PRIORITIES-1) and above the cyw43 async-context worker
- * (tskIDLE_PRIORITY+4). */
-#define TCPIP_MBOX_SIZE                 8
-/* 4096 words (16 KB): the mbedTLS ECDSA-P256 handshake for altcp_tls runs in
- * the tcpip thread context under NO_SYS=0, so this stack must cover it (a
- * 2048-word stack overflows mid-handshake). The bring-up's threadsafe_background
- * model ran the handshake in the cyw43 async-context stack instead. */
-#define TCPIP_THREAD_STACKSIZE          4096
-#define TCPIP_THREAD_PRIO               (configMAX_PRIORITIES - 2)
-#define DEFAULT_THREAD_STACKSIZE        1024
-#define DEFAULT_RAW_RECVMBOX_SIZE       8
-#define DEFAULT_UDP_RECVMBOX_SIZE       8
-#define DEFAULT_TCP_RECVMBOX_SIZE       8
-#define DEFAULT_ACCEPTMBOX_SIZE         8
 
 /* Make lwIP's err_t identical to the firmware's err_t (board/err.h, int32_t),
  * so the two typedefs coexist in the Wi-Fi transport TUs that include both.
@@ -113,7 +97,7 @@
 #define DHCP_DEBUG                      LWIP_DBG_OFF
 
 /* ── Thread safety ────────────────────────────────────────────────────────── */
-#define LWIP_TCPIP_CORE_LOCKING         1
+#define LWIP_TCPIP_CORE_LOCKING         0   /* NO_SYS=1: no tcpip thread to lock */
 
 /* ── Miscellaneous ────────────────────────────────────────────────────────── */
 #define LWIP_NETIF_HOSTNAME             1

@@ -11,6 +11,8 @@ target_link_libraries(transport_mqtt PUBLIC
     identity
     cfg
     json
+    spool            # NV outbound FIFO (ADR-0003)
+    storage          # seq persistence (/state/last_seq.json)
     ui_oled
     sensor_env       # q_env / EnvMsg
     sensor_air       # q_air / AirMsg
@@ -18,7 +20,7 @@ target_link_libraries(transport_mqtt PUBLIC
     sensor_light     # q_light / LightMsg
     pico_stdlib
     hardware_gpio
-    pico_cyw43_arch_lwip_sys_freertos
+    pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
     pico_lwip_mbedtls
     pico_mbedtls
