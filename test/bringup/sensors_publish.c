@@ -1025,7 +1025,13 @@ static void sensors_task(void *arg)
     (void)arg;
 
     stdio_init_all();
-    while (!stdio_usb_connected()) vTaskDelay(pdMS_TO_TICKS(100));
+    /* Wait briefly for a USB-serial terminal (PuTTY) so its first lines aren't
+     * missed, but TIME-BOUND it: the device must boot on USB power alone, with
+     * no host attached (a deployed unit has no laptop).  Proceed after ~5 s
+     * whether or not a terminal is open. */
+    for (int i = 0; i < 50 && !stdio_usb_connected(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
     vTaskDelay(pdMS_TO_TICKS(500));
 
     printf("\n[bringup] sensors_task on core=%u\n", (unsigned)get_core_num());

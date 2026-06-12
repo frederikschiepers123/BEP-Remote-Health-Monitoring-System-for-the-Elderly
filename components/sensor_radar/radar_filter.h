@@ -111,6 +111,14 @@
 #define RADAR_HEART_CAL_OFFSET_BPM     20.0f
 #define RADAR_BREATH_CAL_OFFSET_RPM    2.0f
 
+/* Display hold: while present, keep emitting the last CONFIDENT vital value
+ * (instead of null) through jump-reconfirm / input gaps, for up to this long
+ * since it was last fresh — so the mirror tile always shows a vital ≤ this
+ * old rather than freezing when heart/breath alternate.  A held value is
+ * marked q=2 (preliminary), distinguishing it from a fresh lock (q=0) for the
+ * SBC (§9.6).  The estimate stage still uses ONLY fresh values. */
+#define RADAR_VITAL_HOLD_MS            20000U
+
 /* Final robust vitals estimate (median + MAD outlier rejection), PER VITAL.
  * Window was 60 s in the reference, cut to 20 s after HIL: the MR60BHA2
  * alternates heart and breath bursts, so long simultaneous stability never
@@ -169,6 +177,10 @@ typedef struct {
     StableValueFilter     distance;   /* mm  */
     StableValueFilter     heart;      /* BPM */
     StableValueFilter     breath;     /* RPM */
+    /* display-hold: last CONFIDENT calibrated vital + when it was fresh */
+    float                 heart_disp, breath_disp;
+    uint32_t              heart_disp_ms, breath_disp_ms;
+    bool                  heart_disp_valid, breath_disp_valid;
     /* final-estimate stage (per-vital windows; see stage-4 note) */
     RobustWindowEstimator heart_est;
     RobustWindowEstimator breath_est;

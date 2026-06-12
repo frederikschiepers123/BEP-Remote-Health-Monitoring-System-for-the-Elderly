@@ -127,6 +127,22 @@ strictly alternating phases (never simultaneously) and asserts the estimate
 fires; `test_final_estimate_repeats_while_present` asserts it re-fires on a
 window-plus-gap cadence under sustained presence.
 
+### Vital display-hold (≤20 s)
+
+The alternation also meant the published `heart_bpm` / `breath_bpm` went
+`null` whenever a vital was mid jump-reconfirm, so the mirror tiles (which
+update only on a non-null value) could freeze for well over 20 s. To meet the
+requirement of a vital refresh at least every 20 s, the filter now **holds the
+last confident value** on the output (instead of `null`) for up to
+`RADAR_VITAL_HOLD_MS` (20 s) since it was last actually measured — spanning
+both the svf input-gap window and the jump-reconfirm, anchored to the last
+*fed-while-stable* reading so the two never stack past 20 s. A held value is
+not "stable", so it carries `q=2` (preliminary), keeping it distinguishable
+from a fresh lock (`q=0`) for the SBC (§9.6); the robust estimate still
+consumes only fresh values. Losing presence/distance drops the held value at
+once. Host tests `test_vital_hold_through_jump` and
+`test_vital_input_timeout_expires` cover the hold and its expiry.
+
 ## Consequences
 
 - Easier: stable mirror tiles and presence-driven screen switching without

@@ -77,7 +77,7 @@ scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
 # wrapped in a local timeout because Termux sshd can hold the session open
 # after a setsid launch; the separate verify call reports the actual outcome.
 ssh_t "pkill -f 'tablet_mdns_responder[.]py' 2>/dev/null; true" || true
-timeout 25 ssh_t "
+ssh_to 25 "
   cd '$RMMS_DIR'
   setsid nohup python3 -u tablet_mdns_responder.py tablet </dev/null > mdns.log 2>&1 &
   sleep 2
@@ -106,7 +106,7 @@ else
     # [b]racketed pattern in their own ssh calls, the launch block never greps
     # or kills its own name.
     ssh_t "pkill -f 'tablet_presence_screen[.]py' 2>/dev/null; true" || true
-    timeout 30 ssh_t "
+    ssh_to 30 "
       cd '$RMMS_DIR'
       python3 -c 'import paho.mqtt.client' 2>/dev/null || pip install paho-mqtt >/dev/null 2>&1 || true
       setsid nohup python3 -u tablet_presence_screen.py --insecure </dev/null > presence.log 2>&1 &

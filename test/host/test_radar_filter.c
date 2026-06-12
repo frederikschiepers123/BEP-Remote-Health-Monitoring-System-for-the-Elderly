@@ -161,8 +161,11 @@ static void test_implausible_heart_rejected(void **state)
     assert_int_equal(out.q, 0);                /* one stable vital ⇒ ok */
 }
 
-/* A vital jump beyond max_jump drops it back to validating. */
-static void test_vital_jump_resets(void **state)
+/* A vital jump drops the filter back to re-confirming, but the display HOLDS
+ * the last confident value (≤ RADAR_VITAL_HOLD_MS) so the mirror tile doesn't
+ * null out.  If the vital keeps jumping (never re-confirms) the held value
+ * finally expires. */
+static void test_vital_hold_through_jump(void **state)
 {
     (void)state;
     RadarFilter f;
@@ -170,13 +173,26 @@ static void test_vital_jump_resets(void **state)
     uint32_t t = 1000;
 
     RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
-    RadarSample out = feed(&f, &s, 21, &t);    /* locked (see above) */
-    assert_true(out.heart_bpm > 0.0f);
+    RadarSample out = feed(&f, &s, 21, &t);    /* heart locked */
+    float held = 100.0f - RADAR_HEART_CAL_OFFSET_BPM;
+    assert_true(feq(out.heart_bpm, held));
 
-    RadarSample spike = mk(true, 600, 115.0f, 15.0f, 0);   /* +15 > 8 jump */
-    out = feed(&f, &spike, 1, &t);
-    assert_true(feq(out.heart_bpm, 0.0f));     /* back to validating */
-    assert_int_equal(out.q, 0);                /* breath still stable */
+    /* keep jumping heart >8 BPM every sample so it never re-confirms */
+    for (int i = 0; i < 12; i++) {             /* ~12 s: HELD, not null */
+        RadarSample j = mk(true, 600, (i % 2) ? 115.0f : 60.0f, 15.0f, 0);
+        radar_filter_apply(&f, &j, t, &out);
+        t += 1000u;
+    }
+    assert_true(feq(out.heart_bpm, held));     /* held through re-confirm */
+    assert_int_equal(out.q, 0);                /* breath still fresh-stable */
+
+    /* past RADAR_VITAL_HOLD_MS since the last real reading → held expires */
+    for (int i = 0; i < 12; i++) {
+        RadarSample j = mk(true, 600, (i % 2) ? 115.0f : 60.0f, 15.0f, 0);
+        radar_filter_apply(&f, &j, t, &out);
+        t += 1000u;
+    }
+    assert_true(feq(out.heart_bpm, 0.0f));     /* expired */
 }
 
 /* Losing presence resets vitals even if stale vitals keep being latched. */
@@ -199,10 +215,10 @@ static void test_absence_resets_vitals(void **state)
     assert_true(feq(out.breath_rpm, 0.0f));
 }
 
-/* A vital whose input stream stops holds through the (15 s) timeout, then
- * expires and re-confirms.  The hold is the option-2 behaviour: 14 s of
- * silence (which the old 6 s timeout would have dropped) must keep the value;
- * only past 15 s does it expire. */
+/* When heart frames stop, the value is HELD for RADAR_VITAL_HOLD_MS (20 s)
+ * measured from the last real reading — spanning both the svf input-gap window
+ * and the display-hold, never the two stacked — then expires and re-confirms.
+ * Breath is unaffected throughout. */
 static void test_vital_input_timeout_expires(void **state)
 {
     (void)state;
@@ -211,18 +227,18 @@ static void test_vital_input_timeout_expires(void **state)
     uint32_t t = 1000;
 
     RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
-    RadarSample out = feed(&f, &s, 21, &t);          /* heart locked */
+    RadarSample out = feed(&f, &s, 21, &t);          /* heart locked, t->22000 */
     assert_true(out.heart_bpm > 0.0f);
 
     /* heart frames stop; presence + distance + breath keep flowing */
     RadarSample no_heart = mk(true, 600, 0.0f, 15.0f, 0);
-    out = feed(&f, &no_heart, 14, &t);               /* 14 s < 15 s timeout */
-    assert_true(feq(out.heart_bpm,                   /* still HELD (option 2) */
+    out = feed(&f, &no_heart, 19, &t);               /* 19 s since last reading */
+    assert_true(feq(out.heart_bpm,                   /* still HELD (≤20 s) */
                     100.0f - RADAR_HEART_CAL_OFFSET_BPM));
     assert_true(feq(out.breath_rpm,                  /* unaffected */
                     15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
 
-    out = feed(&f, &no_heart, 2, &t);                /* now past 15 s timeout */
+    out = feed(&f, &no_heart, 3, &t);                /* now past 20 s */
     assert_true(feq(out.heart_bpm, 0.0f));           /* expired */
     assert_true(feq(out.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
 
@@ -455,7 +471,7 @@ int main(void)
         cmocka_unit_test(test_distance_gate_confirm_jump),
         cmocka_unit_test(test_vitals_lock_and_heart_offset),
         cmocka_unit_test(test_implausible_heart_rejected),
-        cmocka_unit_test(test_vital_jump_resets),
+        cmocka_unit_test(test_vital_hold_through_jump),
         cmocka_unit_test(test_absence_resets_vitals),
         cmocka_unit_test(test_vital_input_timeout_expires),
         cmocka_unit_test(test_alternating_bursts_keep_costable),

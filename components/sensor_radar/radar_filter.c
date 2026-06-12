@@ -259,6 +259,12 @@ void radar_filter_init(RadarFilter *f)
     f->estimate           = (RadarVitalsEstimate){0};
     f->estimate_ready     = false;
     f->last_est_sample_ms = 0;
+    f->heart_disp         = 0.0f;
+    f->breath_disp        = 0.0f;
+    f->heart_disp_ms      = 0;
+    f->breath_disp_ms     = 0;
+    f->heart_disp_valid   = false;
+    f->breath_disp_valid  = false;
 }
 
 void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
@@ -286,18 +292,22 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
     }
 
     /* ── 3. Vitals — gated on stable presence AND stable distance ───────── */
-    if (!f->presence.stable_present || !svf_stable(&f->distance)) {
+    bool gating_open = f->presence.stable_present && svf_stable(&f->distance);
+    bool heart_fed   = gating_open && raw->q != 3 && raw->heart_bpm  > 0.0f;
+    bool breath_fed  = gating_open && raw->q != 3 && raw->breath_rpm > 0.0f;
+
+    if (!gating_open) {
         svf_reset(&f->heart);
         svf_reset(&f->breath);
+        /* Lost presence/distance — drop any held display value too, so the
+         * tile doesn't keep showing a vital after the subject is gone. */
+        f->heart_disp_valid  = false;
+        f->breath_disp_valid = false;
     } else {
         svf_expire(&f->heart, now_ms);
         svf_expire(&f->breath, now_ms);
-        if (raw->q != 3 && raw->heart_bpm > 0.0f) {
-            svf_update(&f->heart, raw->heart_bpm, now_ms);
-        }
-        if (raw->q != 3 && raw->breath_rpm > 0.0f) {
-            svf_update(&f->breath, raw->breath_rpm, now_ms);
-        }
+        if (heart_fed)  svf_update(&f->heart, raw->heart_bpm, now_ms);
+        if (breath_fed) svf_update(&f->breath, raw->breath_rpm, now_ms);
     }
 
     /* ── 4. Compose the output sample ────────────────────────────────────── */
@@ -306,17 +316,46 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
                            ? (uint32_t)(f->distance.value + 0.5f)
                            : 0u;
 
+    /* Vitals output with display-hold: emit the calibrated value while stable;
+     * otherwise hold the last confident value for RADAR_VITAL_HOLD_MS so the
+     * mirror tile shows a vital ≤20 s old instead of nulling out during the
+     * MR60BHA2's heart/breath alternation.  The hold-age is anchored to the
+     * last FED-while-stable reading (heart_disp_ms updates only when a real
+     * frame was incorporated), so a value held through both an svf input-gap
+     * and a jump-reconfirm still expires ≤20 s after it was actually measured,
+     * never stacking the two windows.  Held values are not "stable" so stage 5
+     * marks them q=2; the estimate uses only fresh ones. */
     if (svf_stable(&f->heart)) {
         float hr = f->heart.value - RADAR_HEART_CAL_OFFSET_BPM;
-        out->heart_bpm = (hr > 0.0f) ? hr : 0.0f;
+        float hv = (hr > 0.0f) ? hr : 0.0f;
+        if (heart_fed) {                /* fresh measurement → re-anchor age */
+            f->heart_disp       = hv;
+            f->heart_disp_ms    = now_ms;
+            f->heart_disp_valid = (hv > 0.0f);
+        }
+        out->heart_bpm = hv;
+    } else if (f->heart_disp_valid &&
+               (uint32_t)(now_ms - f->heart_disp_ms) <= RADAR_VITAL_HOLD_MS) {
+        out->heart_bpm = f->heart_disp;            /* held (≤20 s old) */
     } else {
-        out->heart_bpm = 0.0f;
+        f->heart_disp_valid = false;
+        out->heart_bpm      = 0.0f;
     }
     if (svf_stable(&f->breath)) {
         float br = f->breath.value - RADAR_BREATH_CAL_OFFSET_RPM;
-        out->breath_rpm = (br > 0.0f) ? br : 0.0f;
+        float bv = (br > 0.0f) ? br : 0.0f;
+        if (breath_fed) {               /* fresh measurement → re-anchor age */
+            f->breath_disp       = bv;
+            f->breath_disp_ms    = now_ms;
+            f->breath_disp_valid = (bv > 0.0f);
+        }
+        out->breath_rpm = bv;
+    } else if (f->breath_disp_valid &&
+               (uint32_t)(now_ms - f->breath_disp_ms) <= RADAR_VITAL_HOLD_MS) {
+        out->breath_rpm = f->breath_disp;          /* held (≤20 s old) */
     } else {
-        out->breath_rpm = 0.0f;
+        f->breath_disp_valid = false;
+        out->breath_rpm      = 0.0f;
     }
 
     /* ── 5. Quality ──────────────────────────────────────────────────────
