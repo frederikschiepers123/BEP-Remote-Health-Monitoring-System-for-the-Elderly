@@ -52,6 +52,11 @@ RMMS_DIR="${RMMS_DIR:-/data/data/com.termux/files/home/rmms}"
 
 step() { printf "\n\033[1;36m[demo] %s\033[0m\n" "$*"; }
 ssh_t() { ssh -p "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${TERMUX_USER}@${TIP}" "$@"; }
+# Same as ssh_t but bounded by a local `timeout N`. MUST wrap the real `ssh`
+# binary, not the ssh_t function: `timeout` exec()s its target, so
+# `timeout N ssh_t ...` fails with exit 127 (no such command) and a trailing
+# `|| true` would silently swallow it — the launch never runs.
+ssh_to() { local secs="$1"; shift; timeout "$secs" ssh -p "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${TERMUX_USER}@${TIP}" "$@"; }
 
 # ── 1. Broker cert + Mosquitto ───────────────────────────────────────────────
 step "refreshing broker cert + restarting Mosquitto for $TIP"
@@ -64,14 +69,21 @@ scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
 # setsid + nohup + python3 -u keeps it alive after this SSH session closes and
 # flushes its log immediately. Android suppresses multicast RX with the screen
 # off, so keep the tablet awake during the demo.
-ssh_t "
-  pkill -f tablet_mdns_responder.py 2>/dev/null || true
-  sleep 0.5
+#
+# The kill MUST be a separate ssh call with a [b]racketed pattern: `pkill -f`
+# matches the remote `bash -c <block>` command line, so a combined
+# kill-then-launch block (whose text contains the script name) kills its own
+# shell — ssh dies with 255 before the launch line runs. The launch ssh is
+# wrapped in a local timeout because Termux sshd can hold the session open
+# after a setsid launch; the separate verify call reports the actual outcome.
+ssh_t "pkill -f 'tablet_mdns_responder[.]py' 2>/dev/null; true" || true
+timeout 25 ssh_t "
   cd '$RMMS_DIR'
   setsid nohup python3 -u tablet_mdns_responder.py tablet </dev/null > mdns.log 2>&1 &
   sleep 2
-  cat mdns.log
-" || echo "[demo] WARNING: responder start failed — Pico will fall back to a literal IP only if broker.json has one"
+" || true
+ssh_t "cat '$RMMS_DIR/mdns.log'; pgrep -f 'tablet_mdns_responder[.]py' >/dev/null" \
+  || echo "[demo] WARNING: responder start failed — Pico will fall back to a literal IP only if broker.json has one"
 
 # ── 2b. Radar-presence → tablet-screen bridge ───────────────────────────────
 # Reads rmms/+/radar (mTLS, mirror cert) and drives the HealthMonitorWakeTest
@@ -90,17 +102,21 @@ else
         echo "[demo] WARNING: mirror cert scp failed"
     scp -P "$TERMUX_PORT" -o StrictHostKeyChecking=accept-new \
         scripts/tablet_presence_screen.py "${TERMUX_USER}@${TIP}:${RMMS_DIR}/" >/dev/null 2>&1 || true
-    ssh_t "
+    # Same self-pkill hazard as the mDNS block above: kill + verify use a
+    # [b]racketed pattern in their own ssh calls, the launch block never greps
+    # or kills its own name.
+    ssh_t "pkill -f 'tablet_presence_screen[.]py' 2>/dev/null; true" || true
+    timeout 30 ssh_t "
       cd '$RMMS_DIR'
       python3 -c 'import paho.mqtt.client' 2>/dev/null || pip install paho-mqtt >/dev/null 2>&1 || true
-      pkill -f tablet_presence_screen.py 2>/dev/null || true
-      sleep 0.5
       setsid nohup python3 -u tablet_presence_screen.py --insecure </dev/null > presence.log 2>&1 &
       sleep 3
-      if pgrep -f tablet_presence_screen.py >/dev/null 2>&1; then
-        echo '[tablet] presence bridge running'; tail -n 3 presence.log 2>/dev/null || true
+    " || true
+    ssh_t "
+      if pgrep -f 'tablet_presence_screen[.]py' >/dev/null 2>&1; then
+        echo '[tablet] presence bridge running'; tail -n 3 '$RMMS_DIR/presence.log' 2>/dev/null || true
       else
-        echo '[tablet] presence bridge NOT running — log:'; cat presence.log 2>/dev/null || true
+        echo '[tablet] presence bridge NOT running — log:'; cat '$RMMS_DIR/presence.log' 2>/dev/null || true
       fi
     " || echo "[demo] WARNING: ssh to tablet failed during presence-bridge start"
 fi

@@ -3,12 +3,15 @@
  * Pure-logic module: we drive radar_filter_apply() with synthetic RadarSample
  * sequences at the real 1 Hz cadence and assert the gate/confirm/reset
  * behaviour ported from the supervisor's reference filter:
- *   - presence debounce: 10 s to confirm, 2 s to drop
+ *   - presence debounce: 10 s to confirm, 8 s to drop
  *   - distance gate 350–1500 mm, 6 s confirm, >200 mm jump restarts
  *   - vitals only after presence AND distance stable; 10 s confirm;
  *     implausible values (heart outside 45–125) never lock
- *   - heart output carries the -RADAR_HEART_CAL_OFFSET_BPM calibration
+ *   - outputs carry the -RADAR_HEART_CAL_OFFSET_BPM /
+ *     -RADAR_BREATH_CAL_OFFSET_RPM calibrations
  *   - q: 0 stable-or-empty, 2 validating, 3 invalid-with-nothing-held
+ *   - final robust estimate: per-vital decoupled windows, one-shot per
+ *     presence episode (re-armed only by absence), calibrated, spread floored
  */
 
 #include <stdarg.h>
@@ -74,9 +77,11 @@ static void test_presence_debounce(void **state)
     out = feed(&f, &person, 1, &t);
     assert_true(out.presence);
 
-    /* absence: 2 s of no evidence drops presence and yields q=0 (empty) */
+    /* absence: 8 s of no evidence drops presence and yields q=0 (empty) */
     RadarSample empty = mk(false, 0, 0.0f, 0.0f, 0);
-    out = feed(&f, &empty, 3, &t);
+    out = feed(&f, &empty, 7, &t);         /* 7 s of silence — still present */
+    assert_true(out.presence);
+    out = feed(&f, &empty, 1, &t);         /* 8 s — dropped */
     assert_false(out.presence);
     assert_int_equal(out.q, 0);
 }
@@ -133,7 +138,7 @@ static void test_vitals_lock_and_heart_offset(void **state)
 
     out = feed(&f, &s, 1, &t);                 /* t0+20000: vitals stable */
     assert_true(feq(out.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
-    assert_true(feq(out.breath_rpm, 15.0f));
+    assert_true(feq(out.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
     assert_int_equal(out.q, 0);
     assert_true(out.presence);
     assert_int_equal(out.distance_mm, 600);
@@ -151,7 +156,8 @@ static void test_implausible_heart_rejected(void **state)
     RadarSample out = feed(&f, &s, 30, &t);    /* way past all windows */
 
     assert_true(feq(out.heart_bpm, 0.0f));     /* rejected forever */
-    assert_true(feq(out.breath_rpm, 15.0f));   /* breath (valid) locked fine */
+    assert_true(feq(out.breath_rpm,            /* breath (valid) locked fine */
+                    15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
     assert_int_equal(out.q, 0);                /* one stable vital ⇒ ok */
 }
 
@@ -187,14 +193,16 @@ static void test_absence_resets_vitals(void **state)
 
     /* person leaves; driver still reports last latched vitals briefly */
     RadarSample gone = mk(false, 0, 100.0f, 15.0f, 0);
-    out = feed(&f, &gone, 3, &t);              /* > 2 s absence */
+    out = feed(&f, &gone, 9, &t);              /* > 8 s absence */
     assert_false(out.presence);
     assert_true(feq(out.heart_bpm, 0.0f));
     assert_true(feq(out.breath_rpm, 0.0f));
 }
 
-/* A vital whose input stream stops (person present, chip stops producing
- * heart frames) must expire via its input timeout and re-confirm afterwards. */
+/* A vital whose input stream stops holds through the (15 s) timeout, then
+ * expires and re-confirms.  The hold is the option-2 behaviour: 14 s of
+ * silence (which the old 6 s timeout would have dropped) must keep the value;
+ * only past 15 s does it expire. */
 static void test_vital_input_timeout_expires(void **state)
 {
     (void)state;
@@ -208,15 +216,59 @@ static void test_vital_input_timeout_expires(void **state)
 
     /* heart frames stop; presence + distance + breath keep flowing */
     RadarSample no_heart = mk(true, 600, 0.0f, 15.0f, 0);
-    out = feed(&f, &no_heart, 8, &t);                /* > 6 s heart timeout */
+    out = feed(&f, &no_heart, 14, &t);               /* 14 s < 15 s timeout */
+    assert_true(feq(out.heart_bpm,                   /* still HELD (option 2) */
+                    100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+    assert_true(feq(out.breath_rpm,                  /* unaffected */
+                    15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+
+    out = feed(&f, &no_heart, 2, &t);                /* now past 15 s timeout */
     assert_true(feq(out.heart_bpm, 0.0f));           /* expired */
-    assert_true(feq(out.breath_rpm, 15.0f));         /* unaffected */
+    assert_true(feq(out.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
 
     /* heart returns: must re-confirm for 10 s, not relock instantly */
     out = feed(&f, &s, 5, &t);
     assert_true(feq(out.heart_bpm, 0.0f));           /* still validating */
     out = feed(&f, &s, 7, &t);                       /* past 10 s confirm */
     assert_true(out.heart_bpm > 0.0f);
+}
+
+/* The MR60BHA2 reports heart and breath in long ALTERNATING bursts (HIL
+ * 2026-06-11): while one streams the other is null for ~10 s.  With the 15 s
+ * (heart) / 20 s (breath) timeouts each vital HOLDS through the other's burst,
+ * so both stay co-stable (q=0) and the robust estimate completes — the whole
+ * point of option 2.  Before the fix (6 s timeout) the idle vital expired
+ * mid-burst and the estimate never fired. */
+static void test_alternating_bursts_keep_costable(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample both = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarVitalsEstimate est;
+
+    RadarSample out = feed(&f, &both, 21, &t);       /* lock both vitals */
+    assert_int_equal(out.q, 0);
+    assert_true(out.heart_bpm > 0.0f && out.breath_rpm > 0.0f);
+
+    /* 10 s heart-only, 10 s breath-only, repeating */
+    RadarSample heart_only  = mk(true, 600, 100.0f, 0.0f, 0);
+    RadarSample breath_only = mk(true, 600, 0.0f, 15.0f, 0);
+    bool fired = false;
+    for (int i = 0; i < 60 && !fired; i++) {
+        const RadarSample *raw = ((i / 10) % 2 == 0) ? &heart_only : &breath_only;
+        radar_filter_apply(&f, raw, t, &out);
+        assert_int_equal(out.q, 0);                  /* never drops to validating */
+        assert_true(out.heart_bpm  > 0.0f);          /* held through breath burst */
+        assert_true(out.breath_rpm > 0.0f);          /* held through heart burst  */
+        fired = radar_filter_take_estimate(&f, &est);
+        t += 1000u;
+    }
+    assert_true(fired);                              /* estimate now reachable */
+    assert_true(feq(est.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+    assert_true(feq(est.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
 }
 
 /* After a long gap in apply() calls, the first sample must NOT be instantly
@@ -251,6 +303,151 @@ static void test_invalid_passthrough(void **state)
     assert_false(out.presence);
 }
 
+/* First estimate: presence locks ~10 s, vitals ~20 s, then the
+ * RADAR_EST_WINDOW_MS (20 s) window closes ~40 s in, with the calibrated
+ * robust mean and the floored spread.  Loop-until-fire so the test isn't
+ * pinned to the exact fire-sample arithmetic. */
+static void test_final_estimate_first_fire(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarVitalsEstimate est;
+
+    int fired_at = -1;
+    for (int i = 0; i < 70 && fired_at < 0; i++) {
+        RadarSample out;
+        radar_filter_apply(&f, &s, t, &out);
+        if (radar_filter_take_estimate(&f, &est)) fired_at = i;
+        t += 1000u;
+    }
+    assert_true(fired_at >= 0);
+    assert_in_range(fired_at, 36, 46);         /* ~20 s lock + 20 s window */
+    assert_true(feq(est.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+    assert_true(feq(est.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+    assert_true(feq(est.heart_spread, RADAR_EST_MIN_ROBUST_SIGMA));
+    assert_true(feq(est.breath_spread, RADAR_EST_MIN_ROBUST_SIGMA));
+    assert_true(est.heart_n  >= RADAR_EST_MIN_SAMPLES);
+    assert_true(est.breath_n >= RADAR_EST_MIN_SAMPLES);
+}
+
+/* The estimate REPEATS while the subject stays present: after the first fire,
+ * continued stability re-arms and fires a fresh estimate each window-plus-gap
+ * (the demo wants it to refresh, not print once per visit). */
+static void test_final_estimate_repeats_while_present(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarVitalsEstimate est;
+
+    int fires = 0;
+    int gaps[4] = {0};
+    int last_fire = -1;
+    for (int i = 0; i < 140 && fires < 3; i++) {
+        RadarSample out;
+        radar_filter_apply(&f, &s, t, &out);
+        if (radar_filter_take_estimate(&f, &est)) {
+            if (last_fire >= 0) gaps[fires - 1] = i - last_fire;
+            last_fire = i;
+            fires++;
+        }
+        t += 1000u;
+    }
+    assert_int_equal(fires, 3);                 /* fired repeatedly */
+    /* each re-fire is one fresh window-plus-confirm gap apart, not instant */
+    assert_in_range(gaps[0], 18, 30);
+    assert_in_range(gaps[1], 18, 30);
+    assert_true(feq(est.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+}
+
+/* Losing presence discards any in-progress windows: no estimate fires while
+ * absent, and after the subject returns a fresh episode fires anew. */
+static void test_final_estimate_discarded_on_absence(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    RadarSample s = mk(true, 600, 100.0f, 15.0f, 0);
+    RadarVitalsEstimate est;
+
+    /* fire once, then the person leaves part-way through the next window */
+    bool fired = false;
+    for (int i = 0; i < 70 && !fired; i++) {
+        RadarSample out;
+        radar_filter_apply(&f, &s, t, &out);
+        fired = radar_filter_take_estimate(&f, &est);
+        t += 1000u;
+    }
+    assert_true(fired);
+    feed(&f, &s, 10, &t);                       /* partial next window */
+
+    /* person leaves (> 8 s silence) → presence drops, windows discarded */
+    RadarSample empty = mk(false, 0, 0.0f, 0.0f, 0);
+    RadarSample out = feed(&f, &empty, 12, &t);
+    assert_false(out.presence);
+    assert_false(radar_filter_take_estimate(&f, &est));   /* nothing while gone */
+
+    /* fresh episode after return: presence 10 s + vitals 10 s + 20 s window */
+    fired = false;
+    for (int i = 0; i < 70 && !fired; i++) {
+        RadarSample o;
+        radar_filter_apply(&f, &s, t, &o);
+        fired = radar_filter_take_estimate(&f, &est);
+        t += 1000u;
+    }
+    assert_true(fired);
+    assert_true(feq(est.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+}
+
+/* The decoupling money-test: heart and breath are NEVER stable at the same
+ * time, yet the estimate fires — each vital latches its window during its
+ * own stable phase, and a latch survives its vital destabilising afterwards.
+ * Phase A: heart steady, breath jumping (3 RPM guard trips every sample).
+ * Phase B: breath steady, heart jumping (8 BPM guard trips every sample). */
+static void test_decoupled_estimate_no_costability(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+    RadarVitalsEstimate est;
+
+    /* Phase A: presence+distance+heart lock; breath alternates 10/20 RPM */
+    for (int i = 0; i < 45; i++) {
+        RadarSample s = mk(true, 600, 100.0f,
+                           (i % 2) ? 10.0f : 20.0f, 0);
+        RadarSample out;
+        radar_filter_apply(&f, &s, t, &out);
+        assert_true(feq(out.breath_rpm, 0.0f));    /* breath never stable */
+        assert_false(radar_filter_take_estimate(&f, &est));
+        t += 1000u;
+    }
+
+    /* Phase B: breath 15 steady; heart alternates 60/100 BPM, destabilising
+     * it — but its already-latched window half must survive */
+    bool fired = false;
+    for (int i = 0; i < 45 && !fired; i++) {
+        RadarSample s = mk(true, 600,
+                           (i % 2) ? 60.0f : 100.0f, 15.0f, 0);
+        RadarSample out;
+        radar_filter_apply(&f, &s, t, &out);
+        fired = radar_filter_take_estimate(&f, &est);
+        t += 1000u;
+    }
+    assert_true(fired);
+    assert_true(feq(est.heart_bpm, 100.0f - RADAR_HEART_CAL_OFFSET_BPM));
+    assert_true(feq(est.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -261,8 +458,13 @@ int main(void)
         cmocka_unit_test(test_vital_jump_resets),
         cmocka_unit_test(test_absence_resets_vitals),
         cmocka_unit_test(test_vital_input_timeout_expires),
+        cmocka_unit_test(test_alternating_bursts_keep_costable),
         cmocka_unit_test(test_feed_gap_not_instantly_stable),
         cmocka_unit_test(test_invalid_passthrough),
+        cmocka_unit_test(test_final_estimate_first_fire),
+        cmocka_unit_test(test_final_estimate_repeats_while_present),
+        cmocka_unit_test(test_final_estimate_discarded_on_absence),
+        cmocka_unit_test(test_decoupled_estimate_no_costability),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

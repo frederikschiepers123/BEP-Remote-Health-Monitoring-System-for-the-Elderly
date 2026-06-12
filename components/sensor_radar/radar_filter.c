@@ -139,6 +139,102 @@ static bool gate_warming_up(const PresenceGate *g)
     return g->candidate_active && !g->stable_present;
 }
 
+/* ── RobustWindowEstimator — windowed median + MAD reducer ───────────────── */
+
+static void rwe_reset(RobustWindowEstimator *e)
+{
+    e->count           = 0;
+    e->first_sample_ms = 0;
+}
+
+static void rwe_add(RobustWindowEstimator *e, float x, uint32_t now)
+{
+    if (!isfinite(x)) {
+        return;
+    }
+    if (e->count == 0) {
+        e->first_sample_ms = now;
+    }
+    if (e->count < RADAR_EST_MAX_SAMPLES) {
+        e->samples[e->count++] = x;
+    }
+}
+
+static bool rwe_ready(const RobustWindowEstimator *e, uint32_t now)
+{
+    return e->count >= RADAR_EST_MIN_SAMPLES &&
+           e->first_sample_ms != 0 &&
+           (uint32_t)(now - e->first_sample_ms) >= RADAR_EST_WINDOW_MS;
+}
+
+static void rwe_sort(float *arr, int n)
+{
+    for (int i = 1; i < n; i++) {
+        float key = arr[i];
+        int j = i - 1;
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+}
+
+static float rwe_median(float *arr, int n)   /* sorts arr in place */
+{
+    rwe_sort(arr, n);
+    if (n % 2 == 1) {
+        return arr[n / 2];
+    }
+    return 0.5f * (arr[n / 2 - 1] + arr[n / 2]);
+}
+
+/* Reduce the window to one robust value: median + MAD, discard samples
+ * deviating more than RADAR_EST_OUTLIER_K × robust σ, mean of the rest. */
+static bool rwe_estimate(const RobustWindowEstimator *e, float *value,
+                         float *spread, int *used)
+{
+    if (e->count < RADAR_EST_MIN_SAMPLES) {
+        return false;
+    }
+
+    float scratch[RADAR_EST_MAX_SAMPLES];
+
+    for (int i = 0; i < e->count; i++) {
+        scratch[i] = e->samples[i];
+    }
+    float med = rwe_median(scratch, e->count);
+
+    for (int i = 0; i < e->count; i++) {
+        scratch[i] = fabsf(e->samples[i] - med);
+    }
+    float mad = rwe_median(scratch, e->count);
+
+    /* 1.4826 converts MAD to a standard-deviation-like robust spread. */
+    float sigma = 1.4826f * mad;
+    if (sigma < RADAR_EST_MIN_ROBUST_SIGMA) {
+        sigma = RADAR_EST_MIN_ROBUST_SIGMA;
+    }
+
+    float threshold = RADAR_EST_OUTLIER_K * sigma;
+    float sum       = 0.0f;
+    int   n         = 0;
+    for (int i = 0; i < e->count; i++) {
+        if (fabsf(e->samples[i] - med) <= threshold) {
+            sum += e->samples[i];
+            n++;
+        }
+    }
+    if (n < RADAR_EST_MIN_SAMPLES / 2) {
+        return false;   /* window too contaminated to trust */
+    }
+
+    *value  = sum / (float)n;
+    *spread = sigma;
+    *used   = n;
+    return true;
+}
+
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
 void radar_filter_init(RadarFilter *f)
@@ -156,6 +252,13 @@ void radar_filter_init(RadarFilter *f)
              RADAR_FILT_BREATH_MIN_RPM, RADAR_FILT_BREATH_MAX_RPM,
              RADAR_FILT_BREATH_JUMP_RPM, RADAR_FILT_BREATH_TAU_MS,
              RADAR_FILT_BREATH_CONFIRM_MS, RADAR_FILT_BREATH_TIMEOUT_MS);
+    rwe_reset(&f->heart_est);
+    rwe_reset(&f->breath_est);
+    f->heart_est_latched  = false;
+    f->breath_est_latched = false;
+    f->estimate           = (RadarVitalsEstimate){0};
+    f->estimate_ready     = false;
+    f->last_est_sample_ms = 0;
 }
 
 void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
@@ -209,7 +312,12 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
     } else {
         out->heart_bpm = 0.0f;
     }
-    out->breath_rpm = svf_stable(&f->breath) ? f->breath.value : 0.0f;
+    if (svf_stable(&f->breath)) {
+        float br = f->breath.value - RADAR_BREATH_CAL_OFFSET_RPM;
+        out->breath_rpm = (br > 0.0f) ? br : 0.0f;
+    } else {
+        out->breath_rpm = 0.0f;
+    }
 
     /* ── 5. Quality ──────────────────────────────────────────────────────
      *  0 — vitals stable, or a confidently-empty room
@@ -230,4 +338,75 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
     } else {
         out->q = 0;   /* confidently empty: presence=false, no vitals */
     }
+
+    /* ── 6. Final robust vitals estimate — per-vital windows, repeating ───
+     * The MR60BHA2 alternates heart/breath bursts, so simultaneous stability
+     * long enough for one shared window never happens on hardware (ADR-0005
+     * HIL note).  Instead each vital fills its own window over its own
+     * stable runs: a vital destabilising discards only its own unlatched
+     * window; a window that spans RADAR_EST_WINDOW_MS is reduced
+     * (median + MAD) and LATCHED into f->estimate.  When BOTH halves are
+     * latched the combined estimate fires and the stage RE-ARMS (clears both
+     * latches and windows) so a fresh estimate is produced each time both
+     * vitals refill — roughly every window-plus-gap while the subject stays.
+     * Losing presence discards any in-progress windows and half-latches. */
+    if (!f->presence.stable_present) {
+        rwe_reset(&f->heart_est);
+        rwe_reset(&f->breath_est);
+        f->heart_est_latched  = false;
+        f->breath_est_latched = false;
+        f->last_est_sample_ms = 0;
+    } else {
+        /* A vital that destabilises before its window completes loses only
+         * that window; an already-latched half is kept until the pair fires. */
+        if (!f->heart_est_latched && !svf_stable(&f->heart)) {
+            rwe_reset(&f->heart_est);
+        }
+        if (!f->breath_est_latched && !svf_stable(&f->breath)) {
+            rwe_reset(&f->breath_est);
+        }
+
+        if (f->last_est_sample_ms == 0 ||
+            (uint32_t)(now_ms - f->last_est_sample_ms) >=
+                RADAR_EST_SAMPLE_EVERY_MS) {
+            f->last_est_sample_ms = now_ms;
+
+            if (!f->heart_est_latched && svf_stable(&f->heart)) {
+                rwe_add(&f->heart_est, out->heart_bpm, now_ms);
+                if (rwe_ready(&f->heart_est, now_ms) &&
+                    rwe_estimate(&f->heart_est, &f->estimate.heart_bpm,
+                                 &f->estimate.heart_spread,
+                                 &f->estimate.heart_n)) {
+                    f->heart_est_latched = true;
+                }
+            }
+            if (!f->breath_est_latched && svf_stable(&f->breath)) {
+                rwe_add(&f->breath_est, out->breath_rpm, now_ms);
+                if (rwe_ready(&f->breath_est, now_ms) &&
+                    rwe_estimate(&f->breath_est, &f->estimate.breath_rpm,
+                                 &f->estimate.breath_spread,
+                                 &f->estimate.breath_n)) {
+                    f->breath_est_latched = true;
+                }
+            }
+            if (f->heart_est_latched && f->breath_est_latched) {
+                f->estimate_ready = true;
+                /* re-arm: next estimate starts from fresh windows */
+                rwe_reset(&f->heart_est);
+                rwe_reset(&f->breath_est);
+                f->heart_est_latched  = false;
+                f->breath_est_latched = false;
+            }
+        }
+    }
+}
+
+bool radar_filter_take_estimate(RadarFilter *f, RadarVitalsEstimate *out)
+{
+    if (!f->estimate_ready) {
+        return false;
+    }
+    *out = f->estimate;
+    f->estimate_ready = false;
+    return true;
 }

@@ -165,6 +165,17 @@ typedef struct {
     bool          found;
 } dns_wait_t;
 
+/* MUST be static, never stack-local: on timeout resolve_broker_host() returns
+ * while the query is still pending inside lwIP, which keeps the callback arg
+ * and fires it later (late reply, internal retry expiry, or a re-issued query
+ * for the same name).  A stack-local wait struct made that a write through a
+ * dead frame — stack corruption that froze this firmware the first time the
+ * mDNS-timeout-then-retry path ran on hardware (HIL 2026-06-11: tablet.local
+ * timed out, retry started, whole firmware went silent).  A stale completion
+ * landing here is benign: the name is always the one broker host, so a late
+ * "found" is a usable address and a late "not found" just retries. */
+static dns_wait_t s_dns_wait;
+
 static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
 {
     (void)name;
@@ -179,15 +190,17 @@ static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
 static bool resolve_broker_host(const char *host, ip_addr_t *out,
                                 uint32_t timeout_ms)
 {
-    dns_wait_t w = { .done = false, .found = false };
+    dns_wait_t *w = &s_dns_wait;
+    w->done  = false;
+    w->found = false;
 
     cyw43_arch_lwip_begin();
-    err_t e = dns_gethostbyname(host, &w.addr, dns_found_cb, &w);
+    err_t e = dns_gethostbyname(host, &w->addr, dns_found_cb, w);
     cyw43_arch_lwip_end();
 
     if (e == ERR_OK) {
         /* Cached result; addr filled synchronously. */
-        *out = w.addr;
+        *out = w->addr;
         return true;
     }
     if (e != ERR_INPROGRESS) {
@@ -196,16 +209,16 @@ static bool resolve_broker_host(const char *host, ip_addr_t *out,
     }
 
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
-    while (!w.done && xTaskGetTickCount() < deadline) {
+    while (!w->done && xTaskGetTickCount() < deadline) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    if (!w.done) {
+    if (!w->done) {
         printf("[bringup] dns_gethostbyname('%s') timeout after %lu ms\n",
                host, (unsigned long)timeout_ms);
         return false;
     }
-    if (w.found) *out = w.addr;
-    return w.found;
+    if (w->found) *out = w->addr;
+    return w->found;
 }
 
 #if OLED_ON
@@ -596,6 +609,16 @@ static void publish_radar_sample(void)
     radar_filter_apply(&s_filt, &raw,
                        (uint32_t)(time_us_64() / 1000u), &s);
     uint8_t q = s.q;
+
+    /* Robust vitals estimate — fires repeatedly while present (ADR-0005). */
+    RadarVitalsEstimate est;
+    if (radar_filter_take_estimate(&s_filt, &est)) {
+        printf("[bringup] FINAL STABLE ESTIMATE: heart %.1f BPM (±%.1f, n=%d),"
+               " breath %.1f RPM (±%.1f, n=%d)\n",
+               (double)est.heart_bpm, (double)est.heart_spread, est.heart_n,
+               (double)est.breath_rpm, (double)est.breath_spread,
+               est.breath_n);
+    }
 
     char payload[256];
     int pn = radar_sample_encode(payload, sizeof(payload),

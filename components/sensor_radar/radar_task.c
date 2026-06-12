@@ -94,6 +94,19 @@ void radar_task(void *arg)
         radar_filter_apply(&filt, &raw,
                            to_ms_since_boot(get_absolute_time()), &sample);
 
+        /* Robust vitals estimate — fires repeatedly while present, once both
+         * per-vital windows refill (ADR-0005).  Dev-console only — the §9.1
+         * topic set is closed, so putting this on the wire would be an ADR +
+         * Radxa sign-off. */
+        RadarVitalsEstimate est;
+        if (radar_filter_take_estimate(&filt, &est)) {
+            LOG_I("Final stable estimate: heart %.1f BPM (±%.1f, n=%d), "
+                  "breath %.1f RPM (±%.1f, n=%d)",
+                  (double)est.heart_bpm, (double)est.heart_spread, est.heart_n,
+                  (double)est.breath_rpm, (double)est.breath_spread,
+                  est.breath_n);
+        }
+
         /* Non-blocking enqueue */
         if (xQueueSendToBack(q_radar, &sample, 0) != pdTRUE) {
             dropped++;

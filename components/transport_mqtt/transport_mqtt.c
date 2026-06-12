@@ -151,6 +151,17 @@ typedef struct {
     bool          found;
 } dns_wait_t;
 
+/* MUST be static, never stack-local: on timeout resolve_host() returns while
+ * the query is still pending inside lwIP, which keeps the callback arg and
+ * fires it later (late reply, internal retry expiry, or a re-issued query for
+ * the same name).  A stack-local wait struct made that a write through a dead
+ * frame — stack corruption that froze the firmware the first time the
+ * mDNS-timeout-then-retry path ran on hardware (HIL 2026-06-11).  A stale
+ * completion landing here is benign: the name is always the one broker host,
+ * so a late "found" is a usable address and a late "not found" just makes the
+ * caller retry. */
+static dns_wait_t s_dns_wait;
+
 static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
 {
     (void)name;
@@ -161,23 +172,25 @@ static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
 
 static bool resolve_host(const char *host, ip_addr_t *out, uint32_t timeout_ms)
 {
-    dns_wait_t w = { .done = false, .found = false };
+    dns_wait_t *w = &s_dns_wait;
+    w->done  = false;
+    w->found = false;
 
     cyw43_arch_lwip_begin();
-    err_t e = dns_gethostbyname(host, &w.addr, dns_found_cb, &w);
+    err_t e = dns_gethostbyname(host, &w->addr, dns_found_cb, w);
     cyw43_arch_lwip_end();
 
-    if (e == ERR_OK) { *out = w.addr; return true; }   /* cached */
+    if (e == ERR_OK) { *out = w->addr; return true; }   /* cached */
     if (e != ERR_INPROGRESS) {
         LOG_W("dns_gethostbyname('%s') immediate err=%d", host, (int)e);
         return false;
     }
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
-    while (!w.done && xTaskGetTickCount() < deadline) {
+    while (!w->done && xTaskGetTickCount() < deadline) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    if (w.found) { *out = w.addr; }
-    return w.found;
+    if (w->found) { *out = w->addr; }
+    return w->found;
 }
 
 /* IP literal first (fast path, no DNS), else host via DNS/mDNS. */
