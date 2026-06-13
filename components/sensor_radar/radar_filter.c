@@ -235,6 +235,54 @@ static bool rwe_estimate(const RobustWindowEstimator *e, float *value,
     return true;
 }
 
+/* ── VitalRing — rolling window for the live robust-median display path ──── */
+
+static void ring_reset(VitalRing *r)
+{
+    r->head  = 0;
+    r->count = 0;
+}
+
+static void ring_push(VitalRing *r, float v, uint32_t now)
+{
+    if (r->count == RADAR_LIVE_WIN_CAP) {          /* full: drop the oldest */
+        r->head = (uint8_t)((r->head + 1U) % RADAR_LIVE_WIN_CAP);
+        r->count--;
+    }
+    uint8_t idx = (uint8_t)((r->head + r->count) % RADAR_LIVE_WIN_CAP);
+    r->val[idx] = v;
+    r->ts[idx]  = now;
+    r->count++;
+}
+
+static void ring_evict_older(VitalRing *r, uint32_t now, uint32_t max_age_ms)
+{
+    while (r->count > 0U &&
+           (uint32_t)(now - r->ts[r->head]) > max_age_ms) {
+        r->head = (uint8_t)((r->head + 1U) % RADAR_LIVE_WIN_CAP);
+        r->count--;
+    }
+}
+
+static bool ring_newest_within(const VitalRing *r, uint32_t now, uint32_t age_ms)
+{
+    if (r->count == 0U) {
+        return false;
+    }
+    uint8_t newest = (uint8_t)((r->head + r->count - 1U) % RADAR_LIVE_WIN_CAP);
+    return (uint32_t)(now - r->ts[newest]) <= age_ms;
+}
+
+static float ring_median(const VitalRing *r)
+{
+    float tmp[RADAR_LIVE_WIN_CAP];
+    int   n = r->count;
+    for (int i = 0; i < n; i++) {
+        tmp[i] = r->val[(r->head + (unsigned)i) % RADAR_LIVE_WIN_CAP];
+    }
+    return rwe_median(tmp, n);                     /* sorts tmp in place */
+}
+
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
 void radar_filter_init(RadarFilter *f)
@@ -259,12 +307,8 @@ void radar_filter_init(RadarFilter *f)
     f->estimate           = (RadarVitalsEstimate){0};
     f->estimate_ready     = false;
     f->last_est_sample_ms = 0;
-    f->heart_disp         = 0.0f;
-    f->breath_disp        = 0.0f;
-    f->heart_disp_ms      = 0;
-    f->breath_disp_ms     = 0;
-    f->heart_disp_valid   = false;
-    f->breath_disp_valid  = false;
+    ring_reset(&f->heart_live);
+    ring_reset(&f->breath_live);
 }
 
 void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
@@ -291,18 +335,23 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
         svf_update(&f->distance, dist_mm, now_ms);
     }
 
-    /* ── 3. Vitals — gated on stable presence AND stable distance ───────── */
+    /* ── 3. Vitals — fed only under stable presence AND stable distance,
+     * into two parallel paths (see header): the LIVE rings (display) and the
+     * reference StableValueFilters (estimate stage only).  The rings survive
+     * a distance wobble (not fed, still displayed until stale) but are
+     * destroyed by presence loss so the mirror blanks when the subject
+     * leaves. */
     bool gating_open = f->presence.stable_present && svf_stable(&f->distance);
     bool heart_fed   = gating_open && raw->q != 3 && raw->heart_bpm  > 0.0f;
     bool breath_fed  = gating_open && raw->q != 3 && raw->breath_rpm > 0.0f;
 
+    if (!f->presence.stable_present) {
+        ring_reset(&f->heart_live);
+        ring_reset(&f->breath_live);
+    }
     if (!gating_open) {
         svf_reset(&f->heart);
         svf_reset(&f->breath);
-        /* Lost presence/distance — drop any held display value too, so the
-         * tile doesn't keep showing a vital after the subject is gone. */
-        f->heart_disp_valid  = false;
-        f->breath_disp_valid = false;
     } else {
         svf_expire(&f->heart, now_ms);
         svf_expire(&f->breath, now_ms);
@@ -310,67 +359,75 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
         if (breath_fed) svf_update(&f->breath, raw->breath_rpm, now_ms);
     }
 
+    /* Live rings: the plausibility range is the only per-sample gate — the
+     * median is the stability mechanism, so a ghost reading is outvoted
+     * instead of triggering a re-confirm outage. */
+    if (heart_fed && raw->heart_bpm >= RADAR_FILT_HEART_MIN_BPM &&
+        raw->heart_bpm <= RADAR_FILT_HEART_MAX_BPM) {
+        ring_push(&f->heart_live, raw->heart_bpm, now_ms);
+    }
+    if (breath_fed && raw->breath_rpm >= RADAR_FILT_BREATH_MIN_RPM &&
+        raw->breath_rpm <= RADAR_FILT_BREATH_MAX_RPM) {
+        ring_push(&f->breath_live, raw->breath_rpm, now_ms);
+    }
+    ring_evict_older(&f->heart_live,  now_ms, RADAR_LIVE_WIN_MS);
+    ring_evict_older(&f->breath_live, now_ms, RADAR_LIVE_WIN_MS);
+
     /* ── 4. Compose the output sample ────────────────────────────────────── */
     out->presence    = f->presence.stable_present;
     out->distance_mm = svf_stable(&f->distance)
                            ? (uint32_t)(f->distance.value + 0.5f)
                            : 0u;
 
-    /* Vitals output with display-hold: emit the calibrated value while stable;
-     * otherwise hold the last confident value for RADAR_VITAL_HOLD_MS so the
-     * mirror tile shows a vital ≤20 s old instead of nulling out during the
-     * MR60BHA2's heart/breath alternation.  The hold-age is anchored to the
-     * last FED-while-stable reading (heart_disp_ms updates only when a real
-     * frame was incorporated), so a value held through both an svf input-gap
-     * and a jump-reconfirm still expires ≤20 s after it was actually measured,
-     * never stacking the two windows.  Held values are not "stable" so stage 5
-     * marks them q=2; the estimate uses only fresh ones. */
-    if (svf_stable(&f->heart)) {
-        float hr = f->heart.value - RADAR_HEART_CAL_OFFSET_BPM;
-        float hv = (hr > 0.0f) ? hr : 0.0f;
-        if (heart_fed) {                /* fresh measurement → re-anchor age */
-            f->heart_disp       = hv;
-            f->heart_disp_ms    = now_ms;
-            f->heart_disp_valid = (hv > 0.0f);
-        }
-        out->heart_bpm = hv;
-    } else if (f->heart_disp_valid &&
-               (uint32_t)(now_ms - f->heart_disp_ms) <= RADAR_VITAL_HOLD_MS) {
-        out->heart_bpm = f->heart_disp;            /* held (≤20 s old) */
+    /* Vitals output: the live rolling median, calibrated.  Shown once
+     * RADAR_LIVE_MIN_SAMPLES readings exist and the newest is no older than
+     * RADAR_LIVE_STALE_MS; the number itself refreshes on every apply()
+     * (≈ publish cadence), so the mirror tile is never frozen.  Rings were
+     * already cleared above on presence loss. */
+    bool heart_live_ok =
+        f->heart_live.count >= RADAR_LIVE_MIN_SAMPLES &&
+        ring_newest_within(&f->heart_live, now_ms, RADAR_LIVE_STALE_MS);
+    bool breath_live_ok =
+        f->breath_live.count >= RADAR_LIVE_MIN_SAMPLES &&
+        ring_newest_within(&f->breath_live, now_ms, RADAR_LIVE_STALE_MS);
+
+    if (heart_live_ok) {
+        float hr = ring_median(&f->heart_live) - RADAR_HEART_CAL_OFFSET_BPM;
+        out->heart_bpm = (hr > 0.0f) ? hr : 0.0f;
     } else {
-        f->heart_disp_valid = false;
-        out->heart_bpm      = 0.0f;
+        out->heart_bpm = 0.0f;
     }
-    if (svf_stable(&f->breath)) {
-        float br = f->breath.value - RADAR_BREATH_CAL_OFFSET_RPM;
-        float bv = (br > 0.0f) ? br : 0.0f;
-        if (breath_fed) {               /* fresh measurement → re-anchor age */
-            f->breath_disp       = bv;
-            f->breath_disp_ms    = now_ms;
-            f->breath_disp_valid = (bv > 0.0f);
-        }
-        out->breath_rpm = bv;
-    } else if (f->breath_disp_valid &&
-               (uint32_t)(now_ms - f->breath_disp_ms) <= RADAR_VITAL_HOLD_MS) {
-        out->breath_rpm = f->breath_disp;          /* held (≤20 s old) */
+    if (breath_live_ok) {
+        float br = ring_median(&f->breath_live) - RADAR_BREATH_CAL_OFFSET_RPM;
+        out->breath_rpm = (br > 0.0f) ? br : 0.0f;
     } else {
-        f->breath_disp_valid = false;
-        out->breath_rpm      = 0.0f;
+        out->breath_rpm = 0.0f;
     }
 
     /* ── 5. Quality ──────────────────────────────────────────────────────
-     *  0 — vitals stable, or a confidently-empty room
-     *  2 — validating (presence/distance/vitals still confirming), or a
-     *      stable presence whose vitals haven't locked
+     * The envelope carries ONE q for a sample that may publish BOTH vitals,
+     * so q must reflect the LEAST fresh PUBLISHED vital — not whichever is
+     * freshest.  Otherwise a stale value carried on its ring (FRESH..STALE,
+     * i.e. 10–25 s old) would inherit q=0 just because the other vital is
+     * streaming, and the SBC would file it as FHIR `final` (§9.6).  So:
+     *  0 — at least one vital published and EVERY published vital is fresh
+     *      (newest ≤ RADAR_LIVE_FRESH_MS), or a confidently-empty room
+     *  2 — validating (presence/distance/rings still filling), or ANY
+     *      published vital carried on older window data (preliminary, §9.6)
      *  3 — invalid input and nothing held by the filter                    */
-    bool vitals_stable = svf_stable(&f->heart) || svf_stable(&f->breath);
-    bool validating    = gate_warming_up(&f->presence) ||
-                         (f->presence.stable_present && !vitals_stable);
+    bool heart_stale  = heart_live_ok &&
+        !ring_newest_within(&f->heart_live, now_ms, RADAR_LIVE_FRESH_MS);
+    bool breath_stale = breath_live_ok &&
+        !ring_newest_within(&f->breath_live, now_ms, RADAR_LIVE_FRESH_MS);
+    bool any_published = heart_live_ok || breath_live_ok;
+    bool all_fresh     = any_published && !heart_stale && !breath_stale;
+    bool validating = gate_warming_up(&f->presence) ||
+                      (f->presence.stable_present && !all_fresh);
 
     if (raw->q == 3 && !f->presence.stable_present &&
         !gate_warming_up(&f->presence)) {
         out->q = 3;
-    } else if (vitals_stable) {
+    } else if (all_fresh) {
         out->q = 0;
     } else if (validating) {
         out->q = 2;
@@ -405,13 +462,21 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
             rwe_reset(&f->breath_est);
         }
 
+        /* last_est_sample_ms==0 is the "no sample yet" sentinel.  It cannot
+         * collide with a real now_ms here: this branch runs only under
+         * presence.stable_present, which requires PRESENCE_CONFIRM_MS of
+         * evidence, so now_ms ≥ RADAR_FILT_PRESENCE_CONFIRM_MS (> 0) whenever
+         * we write it below. */
         if (f->last_est_sample_ms == 0 ||
             (uint32_t)(now_ms - f->last_est_sample_ms) >=
                 RADAR_EST_SAMPLE_EVERY_MS) {
             f->last_est_sample_ms = now_ms;
 
+            /* Collect the CALIBRATED StableValueFilter values — not the
+             * published sample, which now carries the live ring median. */
             if (!f->heart_est_latched && svf_stable(&f->heart)) {
-                rwe_add(&f->heart_est, out->heart_bpm, now_ms);
+                float hr = f->heart.value - RADAR_HEART_CAL_OFFSET_BPM;
+                rwe_add(&f->heart_est, (hr > 0.0f) ? hr : 0.0f, now_ms);
                 if (rwe_ready(&f->heart_est, now_ms) &&
                     rwe_estimate(&f->heart_est, &f->estimate.heart_bpm,
                                  &f->estimate.heart_spread,
@@ -420,7 +485,8 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
                 }
             }
             if (!f->breath_est_latched && svf_stable(&f->breath)) {
-                rwe_add(&f->breath_est, out->breath_rpm, now_ms);
+                float br = f->breath.value - RADAR_BREATH_CAL_OFFSET_RPM;
+                rwe_add(&f->breath_est, (br > 0.0f) ? br : 0.0f, now_ms);
                 if (rwe_ready(&f->breath_est, now_ms) &&
                     rwe_estimate(&f->breath_est, &f->estimate.breath_rpm,
                                  &f->estimate.breath_spread,

@@ -111,11 +111,15 @@ Module.register("MMM-SensorUI", {
     const vitalWrapper = document.createElement("div");
     vitalWrapper.className = "vitalWrapper";
 
-    const vitalReady =
-      hasValue(this.heartRate) &&
-      hasValue(this.respiratoryRate);
+    // Each vital tile is independent: heart and breath arrive (and clear) on
+    // their own cadence — the radar carries one through the other's burst —
+    // so an absent vital must show "Measuring..." for ITS tile only, never
+    // blank the other. Only when BOTH are absent do we collapse to the
+    // combined measuring panel.
+    const heartReady  = hasValue(this.heartRate);
+    const breathReady = hasValue(this.respiratoryRate);
 
-    if (!vitalReady) {
+    if (!heartReady && !breathReady) {
 
       vitalWrapper.classList.add("measuringMode");
 
@@ -137,21 +141,17 @@ Module.register("MMM-SensorUI", {
     } else {
 
       vitalWrapper.appendChild(
-        createStatusCard(
-          "fa-heart-pulse",
-          this.heartRate,
-          "BPM",
-          this.heartRateTL
-        )
+        heartReady
+          ? createStatusCard("fa-heart-pulse", this.heartRate, "BPM",
+                             this.heartRateTL)
+          : createMeasuringCard("fa-heart-pulse")
       );
 
       vitalWrapper.appendChild(
-        createStatusCard(
-          "fa-lungs",
-          this.respiratoryRate,
-          "breaths<br>per min",
-          this.respiratoryRateTL
-        )
+        breathReady
+          ? createStatusCard("fa-lungs", this.respiratoryRate,
+                             "breaths<br>per min", this.respiratoryRateTL)
+          : createMeasuringCard("fa-lungs")
       );
     }
 
@@ -279,12 +279,14 @@ notificationReceived: function(notification, payload, sender) {
           console.log("SensorUI received:", payload);
 
           /* Any actual sensor reading (vitals or environment) refreshes the
-           * footer timestamp.  Operator messages and the broker status are
-           * not readings — they must not mask a silent device. */
+           * footer timestamp.  Operator messages, the broker status, and
+           * EMPTY values (vital clears sent when nobody is present) are not
+           * readings — they must not mask a silent device. */
           if (payload.topic &&
               payload.topic.indexOf("sensors/") === 0 &&
               payload.topic !== "sensors/infomessage" &&
-              payload.topic !== "sensors/status") {
+              payload.topic !== "sensors/status" &&
+              payload.message !== "") {
               this.lastReadingAt = new Date();
           }
 
@@ -340,6 +342,29 @@ notificationReceived: function(notification, payload, sender) {
 
 });
 
+
+/* A single-tile "Measuring..." placeholder, occupying the same card slot as a
+ * real vital so the layout doesn't shift when only ONE vital is absent (the
+ * other keeps showing its number). */
+function createMeasuringCard(iconName) {
+  const card = document.createElement("div");
+  card.className = "statusCard measuringCard";
+
+  const icon = document.createElement("div");
+  icon.className = "statusMainIcon";
+  icon.innerHTML = `<i class="fas ${iconName}"></i>`;
+
+  const valueDiv = document.createElement("div");
+  valueDiv.className = "statusValue statusValueTextOnly";
+  const textSpan = document.createElement("span");
+  textSpan.className = "statusTextOnly";
+  textSpan.innerHTML = "Measuring...";
+  valueDiv.appendChild(textSpan);
+
+  card.appendChild(icon);
+  card.appendChild(valueDiv);
+  return card;
+}
 
 function createStatusCard(iconName, value, unit, status, textOnly = false) {
 
@@ -448,6 +473,12 @@ function hasValue(value) {
 }
 
 function getTrafficLight(value, threshold) {
+
+  // An absent/cleared vital ("" sent when nobody is present, or a non-numeric
+  // message) has no severity — return "" so it never renders as red.
+  if (!hasValue(value) || !Number.isFinite(Number(value))) {
+    return "";
+  }
 
   value = Number(value);
 

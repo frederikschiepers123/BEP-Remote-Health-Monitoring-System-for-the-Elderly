@@ -127,7 +127,38 @@ strictly alternating phases (never simultaneously) and asserts the estimate
 fires; `test_final_estimate_repeats_while_present` asserts it re-fires on a
 window-plus-gap cadence under sustained presence.
 
-### Vital display-hold (≤20 s)
+### Live display path: rolling robust median (supersedes the display-hold)
+
+A tightened requirement (2026-06-12: "stable, updating vitals on the mirror at
+least every 10 s, and only while presence is detected") exposed the structural
+limit of the hold-the-last-number approach below: a frozen hold is not an
+*update*, and the reference's jump-guard + 10 s re-confirm kept creating the
+very outages the hold papered over. The live path was therefore redesigned:
+
+- Each vital keeps a **ring of its last 30 s of in-range raw readings**
+  (`RADAR_LIVE_WIN_MS`, range gate 45–125 BPM / 6–30 RPM only); every apply()
+  publishes the ring's **median**, calibrated. The median is the stability
+  mechanism — a ghost reading is outvoted instead of triggering a re-confirm
+  outage — and the value genuinely refreshes every publish (~1.3 s).
+- Nothing is shown until `RADAR_LIVE_MIN_SAMPLES` (5) readings accumulate
+  (~5 s implicit confirm, faster than the reference's 10 s); the vital blanks
+  when the newest reading exceeds `RADAR_LIVE_STALE_MS` (25 s, covering the
+  sensor's measured burst-gap p90 ≈ 20 s); `q=0` while the newest reading is
+  ≤ `RADAR_LIVE_FRESH_MS` (10 s) old, else `q=2` (preliminary, §9.6).
+- **Presence loss clears the rings immediately**, so vitals vanish from the
+  wire within `ABSENCE_CONFIRM_MS` of the subject leaving. The mirror bridge
+  now forwards null vitals as explicit clears (empty value → the UI's
+  "Measuring..." placeholder), so the tiles blank instead of freezing on the
+  last number — the "display only when present" half of the requirement.
+- The supervisor's StableValueFilter pipeline is **retained unchanged as the
+  estimate path**: it feeds only the repeating robust estimate, which remains
+  the high-confidence (dev-console) readout. Display and estimate are
+  deliberately different standards of evidence.
+- Host test `test_live_updates_meet_10s_requirement` drives 90 s of the
+  sensor's real 7-on/7-off alternation pattern and asserts no >10 s gap in
+  either published vital.
+
+### Vital display-hold (≤20 s) — superseded by the live median path above
 
 The alternation also meant the published `heart_bpm` / `breath_bpm` went
 `null` whenever a vital was mid jump-reconfirm, so the mirror tiles (which

@@ -171,8 +171,13 @@ module.exports = NodeHelper.create({
                 if (v.co2_ppm  != null) send("co2",        String(v.co2_ppm));
                 if (v.tvoc_ppb != null) send("tvoc",       String(v.tvoc_ppb));
             } else if (kind === "radar") {
-                if (v.heart_bpm  != null) send("heartrate",       Math.round(Number(v.heart_bpm)).toString());
-                if (v.breath_bpm != null) send("respiratoryrate", Math.round(Number(v.breath_bpm)).toString());
+                // Vitals are presence-gated on the firmware: null means "no
+                // presence-confirmed reading" (absent, or signal stale).
+                // Forward null as an EMPTY value so the UI clears the tile
+                // (hasValue("") is false → "Measuring..."), instead of
+                // freezing the last number after the person walks away.
+                send("heartrate",       v.heart_bpm  != null ? Math.round(Number(v.heart_bpm)).toString()  : "");
+                send("respiratoryrate", v.breath_bpm != null ? Math.round(Number(v.breath_bpm)).toString() : "");
             } else if (kind === "info") {
                 if (v.text != null) send("infomessage", v.text);
             }

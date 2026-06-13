@@ -22,10 +22,16 @@
  *      larger than RADAR_FILT_DIST_JUMP_MM restarts validation; the value must
  *      be stable for RADAR_FILT_DIST_CONFIRM_MS, then a time-aware low-pass
  *      (tau RADAR_FILT_DIST_TAU_MS) smooths it.
- *   3. Vitals gating — heart/breath are only processed while presence AND
- *      distance are stable; each goes through the same plausibility-range /
- *      max-jump / confirm / low-pass pipeline, and resets if presence or
- *      distance destabilise or the input stream stops (timeout).
+ *   3. Vitals — fed only while presence AND distance are stable, then split
+ *      into TWO parallel paths:
+ *      - LIVE (what is published in the sample): a rolling robust median
+ *        over the last RADAR_LIVE_WIN_MS of in-range readings per vital —
+ *        stable (outliers outvoted), continuously updating, blanked on
+ *        staleness or presence loss.  See the RADAR_LIVE_* block below.
+ *      - ESTIMATE: the reference's plausibility-range / max-jump / confirm /
+ *        low-pass StableValueFilter per vital, feeding ONLY the stage-4
+ *        robust estimate; resets if presence or distance destabilise or its
+ *        input stream stops (timeout).
  *   4. Final robust vitals estimate — DECOUPLED per vital (HIL 2026-06-11:
  *      the MR60BHA2 alternates heart/breath bursts and a returning burst
  *      often jumps past the guard, so requiring simultaneous stability never
@@ -111,13 +117,25 @@
 #define RADAR_HEART_CAL_OFFSET_BPM     20.0f
 #define RADAR_BREATH_CAL_OFFSET_RPM    2.0f
 
-/* Display hold: while present, keep emitting the last CONFIDENT vital value
- * (instead of null) through jump-reconfirm / input gaps, for up to this long
- * since it was last fresh — so the mirror tile always shows a vital ≤ this
- * old rather than freezing when heart/breath alternate.  A held value is
- * marked q=2 (preliminary), distinguishing it from a fresh lock (q=0) for the
- * SBC (§9.6).  The estimate stage still uses ONLY fresh values. */
-#define RADAR_VITAL_HOLD_MS            20000U
+/* LIVE display path: rolling robust median (requirement 2026-06-12: a stable,
+ * UPDATING vital on the mirror at least every 10 s while someone is present).
+ * Each vital keeps a ring of its last RADAR_LIVE_WIN_MS of in-range raw
+ * readings; every apply() publishes the ring's MEDIAN.  The median is the
+ * stability mechanism — a ghost reading is outvoted instead of triggering the
+ * reference's jump-guard + 10 s re-confirm (whose outages were why the wire
+ * went null for >20 s).  Nothing is shown until RADAR_LIVE_MIN_SAMPLES
+ * readings accumulate (~5 s implicit confirm); the value goes stale-null when
+ * the newest reading exceeds RADAR_LIVE_STALE_MS (sensor burst-gap p90 ≈ 20 s
+ * measured on hardware); presence loss clears the rings immediately, so the
+ * mirror blanks within ABSENCE_CONFIRM_MS of the subject leaving.  q=0 while
+ * the newest reading is ≤ RADAR_LIVE_FRESH_MS old, else q=2 (preliminary, for
+ * the SBC per §9.6).  The supervisor's StableValueFilter path still exists —
+ * it feeds ONLY the repeating robust estimate (stage 6). */
+#define RADAR_LIVE_WIN_MS              30000U /* ring span                     */
+#define RADAR_LIVE_WIN_CAP             32     /* ≥ span / publish cadence      */
+#define RADAR_LIVE_MIN_SAMPLES         5      /* readings before showing       */
+#define RADAR_LIVE_FRESH_MS            10000U /* newest ≤ this → q=0           */
+#define RADAR_LIVE_STALE_MS            25000U /* newest > this → stop showing  */
 
 /* Final robust vitals estimate (median + MAD outlier rejection), PER VITAL.
  * Window was 60 s in the reference, cut to 20 s after HIL: the MR60BHA2
@@ -172,15 +190,22 @@ typedef struct {
     int   breath_n;
 } RadarVitalsEstimate;
 
+/* Rolling window of timestamped in-range readings (live display path). */
+typedef struct {
+    float    val[RADAR_LIVE_WIN_CAP];
+    uint32_t ts[RADAR_LIVE_WIN_CAP];
+    uint8_t  head;    /* index of oldest entry */
+    uint8_t  count;
+} VitalRing;
+
 typedef struct {
     PresenceGate          presence;
     StableValueFilter     distance;   /* mm  */
-    StableValueFilter     heart;      /* BPM */
-    StableValueFilter     breath;     /* RPM */
-    /* display-hold: last CONFIDENT calibrated vital + when it was fresh */
-    float                 heart_disp, breath_disp;
-    uint32_t              heart_disp_ms, breath_disp_ms;
-    bool                  heart_disp_valid, breath_disp_valid;
+    StableValueFilter     heart;      /* BPM — estimate path only (stage 6) */
+    StableValueFilter     breath;     /* RPM — estimate path only (stage 6) */
+    /* live display path: rolling robust medians */
+    VitalRing             heart_live;
+    VitalRing             breath_live;
     /* final-estimate stage (per-vital windows; see stage-4 note) */
     RobustWindowEstimator heart_est;
     RobustWindowEstimator breath_est;
