@@ -19,8 +19,8 @@
 #define ENS160_REG_OPMODE       0x10U
 #define ENS160_REG_CONFIG       0x11U
 #define ENS160_REG_COMMAND      0x12U
-#define ENS160_REG_TEMP_IN      0x13U   /* 2 bytes LE, Q8.8 Kelvin           */
-#define ENS160_REG_RH_IN        0x15U   /* 2 bytes LE, Q8.8 %rH              */
+#define ENS160_REG_TEMP_IN      0x13U   /* 2 bytes LE, Kelvin × 64 (u10.6)   */
+#define ENS160_REG_RH_IN        0x15U   /* 2 bytes LE, %rH × 512 (u7.9)      */
 #define ENS160_REG_STATUS       0x20U
 #define ENS160_REG_AQI          0x21U   /* UBA AQI 1..5                      */
 #define ENS160_REG_TVOC         0x22U   /* 2 bytes LE, ppb                   */
@@ -155,20 +155,24 @@ err_t ens160_set_compensation(Ens160 *dev, float temp_c, float hum_pct)
     if (!dev) {
         return ERR_INVALID_ARG;
     }
-    /* TEMP_IN: Kelvin in Q8.8 (datasheet §6.2.4). */
-    float temp_k = temp_c + 273.15f;
-    if (temp_k < 0.0f) temp_k = 0.0f;
-    if (temp_k > 327.67f) temp_k = 327.67f;
-    uint16_t temp_q88 = (uint16_t)(temp_k * 256.0f);
+    /* TEMP_IN: Kelvin × 64 (u10.6), per the ScioSense reference driver's
+     * set_envdata.  NOT Q8.8 — ×256 overflows uint16 for any ambient above
+     * −17 °C (e.g. 19 °C → 292.15 K × 256 = 74790, wraps to 9254, so the
+     * chip read −128.6 °C on every compensation write; root cause of the
+     * field STATUS=0x03 dropouts investigated 2026-06-12).  Clamp to the
+     * sensor's operating range. */
+    if (temp_c < -40.0f) temp_c = -40.0f;
+    if (temp_c > 85.0f)  temp_c = 85.0f;
+    uint16_t temp_q = (uint16_t)((temp_c + 273.15f) * 64.0f);
 
-    /* RH_IN: %rH in Q8.8. */
+    /* RH_IN: %rH × 512 (u7.9). */
     if (hum_pct < 0.0f) hum_pct = 0.0f;
     if (hum_pct > 100.0f) hum_pct = 100.0f;
-    uint16_t rh_q88 = (uint16_t)(hum_pct * 256.0f);
+    uint16_t rh_q = (uint16_t)(hum_pct * 512.0f);
 
     uint8_t buf[4] = {
-        (uint8_t)(temp_q88 & 0xFFU), (uint8_t)(temp_q88 >> 8),
-        (uint8_t)(rh_q88   & 0xFFU), (uint8_t)(rh_q88   >> 8),
+        (uint8_t)(temp_q & 0xFFU), (uint8_t)(temp_q >> 8),
+        (uint8_t)(rh_q   & 0xFFU), (uint8_t)(rh_q   >> 8),
     };
     return write_regs(dev, ENS160_REG_TEMP_IN, buf, 4);
 }
@@ -194,16 +198,31 @@ err_t ens160_read_sample(Ens160 *dev, Ens160Sample *out)
 
     /* Self-recovery: if STATAS is clear the chip is no longer running an
      * OPMODE — it has dropped out of STANDARD mode (observed in the field as
-     * STATUS=0x00 with all-zero data, often after a power glitch or an I²C
-     * disturbance). Re-enter STANDARD so it restarts (and warms up again)
-     * rather than reporting zeros forever. Guarded on STATAS-clear, so once
-     * the chip is running (STATAS set, even during warm-up) we never re-issue
-     * — that avoids resetting the warm-up timer on every read. STATER is
+     * STATUS=0x00/0x03 with all-zero data, often after a power glitch or an
+     * I²C disturbance). Re-enter STANDARD so it restarts (and warms up again)
+     * rather than reporting zeros forever.
+     *
+     * DEBOUNCED: re-writing STANDARD restarts the chip's warm-up, so reacting
+     * to a single STATAS-clear read turns a transient glitch into a real
+     * ~3 min outage — and while the chip is persistently down it would
+     * re-issue on every read, never letting a restart complete. Require 2
+     * consecutive not-operating reads before recovering, and reset the
+     * counter after the write so the next rewrite is at least 2 reads away.
+     * The caller still marks every not-operating sample q=3. STATER is
      * logged so a genuine hardware fault is visible. */
     if (!ens160_is_operating(buf[0])) {
-        LOG_W("ENS160 not running (status=0x%02X, STATER=%d) — re-entering STANDARD",
-              buf[0], (buf[0] & ENS160_STATUS_STATER) ? 1 : 0);
-        (void)write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
+        dev->statas_clear_count++;
+        if (dev->statas_clear_count >= 2U) {
+            LOG_W("ENS160 not running (status=0x%02X, STATER=%d) — re-entering STANDARD",
+                  buf[0], (buf[0] & ENS160_STATUS_STATER) ? 1 : 0);
+            (void)write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
+            dev->statas_clear_count = 0;
+        } else {
+            LOG_W("ENS160 not running (status=0x%02X, STATER=%d) — transient? awaiting confirm",
+                  buf[0], (buf[0] & ENS160_STATUS_STATER) ? 1 : 0);
+        }
+    } else {
+        dev->statas_clear_count = 0;
     }
 
     return ERR_OK;

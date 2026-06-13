@@ -34,6 +34,9 @@ typedef struct {
 typedef struct {
     i2c_inst_t *i2c;
     uint8_t     addr;     /* 0x52 or 0x53 */
+    uint8_t     statas_clear_count;  /* consecutive not-operating reads; the
+                                        recovery OPMODE rewrite is debounced
+                                        on this (see ens160_read_sample) */
 } Ens160;
 
 /* Validity field (status bits 3:2). */
