@@ -50,9 +50,10 @@ const AIR_QUALITY_STATUS = {
 // shows "Hyperventilation?" (red) instead of the plain unit. This is tachypnea,
 // NOT a confirmed diagnosis — the "?" is deliberate, pending clinical sign-off
 // (CLAUDE.md §9.5). >24 RPM is already the red band (THRESHOLDS.respiratoryRate),
-// and the firmware caps the sensor at ~30, so this fires for sustained fast
-// breathing in the high-20s. Sibling of the "No breathing" hold banner.
-const RESP_HYPERVENT_RPM = 25;
+// and the firmware caps the sensor at ~30, so this fires only at the very top of
+// the band. 25-28 RPM already turns the tile red (the symbol), which is enough on
+// its own; the text appears only at >=29. Sibling of the "No breathing" banner.
+const RESP_HYPERVENT_RPM = 29;
 
 Module.register("MMM-SensorUI", {
   defaults: {},
