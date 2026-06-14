@@ -51,14 +51,23 @@ wait_for_port () {
     return 1
 }
 
-launch_chrome () {
-    if command -v am >/dev/null 2>&1; then
+launch_viewer () {
+    if ! command -v am >/dev/null 2>&1; then
+        echo "(no 'am' on PATH — install termux-api; on a desktop just open $URL)" >&2
+        return
+    fi
+    # Prefer Fully Kiosk Browser (de.ozerov.fully) — it has a real kiosk mode
+    # and a configured Start URL (set it to http://localhost:8080). Fall back
+    # to Chrome (no true kiosk on Android) if Fully isn't installed.
+    if pm list packages 2>/dev/null | grep -q "de.ozerov.fully" \
+       || [ "${VIEWER:-}" = "fully" ]; then
+        am start -n de.ozerov.fully/.MainActivity >/dev/null 2>&1 \
+            || echo "am start (Fully) failed" >&2
+    else
         am start -n com.android.chrome/com.google.android.apps.chrome.Main \
             -a android.intent.action.VIEW -d "$URL" \
             --activity-clear-task >/dev/null 2>&1 \
-            || echo "am start failed (Chrome not installed? termux-api missing?)" >&2
-    else
-        echo "(no 'am' on PATH — install termux-api; on a desktop just open $URL)" >&2
+            || echo "am start (Chrome) failed (Chrome/termux-api missing?)" >&2
     fi
 }
 
@@ -76,8 +85,8 @@ while true; do
     server_pid=$!
 
     if wait_for_port; then
-        echo "[$(date -Iseconds)] MM² listening, opening Chrome" >> "$LOG"
-        launch_chrome
+        echo "[$(date -Iseconds)] MM² listening, opening viewer" >> "$LOG"
+        launch_viewer
         backoff=2
     else
         echo "[$(date -Iseconds)] MM² did not open :$MM_PORT in 30s" >> "$LOG"
