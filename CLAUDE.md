@@ -202,9 +202,10 @@ runtime UART probing):
   it has no breath-phase stream, so `resp_motion` degrades to `null`
   (graceful), and it often reports no heart rate (`heart_bpm` → `null`, §9.2.2).
 
-A third radar is again a new `radar_*.c` plus one `radar_select.c` branch. (The
-DFRobot C1001, a different 24 GHz alternative briefly carried here, was removed
-from the project and is unrelated to the HMMD module.)
+A third radar is again a new `radar_*.c` plus one `radar_select.c` branch — a
+DFRobot C1001 (a different 24 GHz module, unrelated to the HMMD) driver is **in
+development** on exactly that path; its board pins are already wired
+(`BOARD_C1001_*` in `board_pico2wh.h`).
 
 **Note on framing (bench-resolved):** The Seeed MR60BHA2 does **not** use the
 Andar/AI-Thinker `0x53 0x59` / `0x54 0x43` framing. Bring-up of the live
@@ -1341,9 +1342,10 @@ Resolve each, then strip the TODO.
   `components/sensor_radar/radar_hmmd.c` + one `radar_select.c` branch + one
   `CfgRadarKind` value — no change to the task, the `rmms/<uuid>/radar` topic,
   or the §9.2 schema, exactly as the seam promises (§3.2, §7.4).
-- **DFRobot C1001 radar removed from the project:** a *different* 24 GHz
-  alternative briefly carried here, unrelated to the HMMD module; deleted. The
-  `radar_driver_t` v-table now carries the MR60BHA2 + HMMD pair (§3.2, §7.4).
+- **DFRobot C1001 radar — in development:** a *different* 24 GHz module
+  (unrelated to the HMMD) is being added as a third driver behind the v-table.
+  The `radar_driver_t` v-table carries the MR60BHA2 + HMMD pair today; the C1001
+  joins via a new `radar_*.c` + one `radar_select.c` branch (§3.2, §7.4).
 - TLS scope: mTLS over Wi-Fi (the sole v1 transport), static cert chain. The
   USB-CDC transport (and its mTLS) is out of scope for v1 (§2.1).
 - Face recognition: descoped from v1 entirely (see §17).
