@@ -559,7 +559,7 @@ static RadarSample lock_with_motion(RadarFilter *f, uint32_t *t)
 {
     /* High amplitude (>RESUME) = clearly breathing. 16 s passes presence (10 s)
      * + distance (6 s) gates and fills the breath ring (>=5 samples). */
-    RadarSample s = mk_amp(true, 600, 75.0f, 15.0f, 0, 3.0f);
+    RadarSample s = mk_amp(true, 600, 75.0f, 15.0f, 0, 8.0f);
     RadarSample out = feed(f, &s, 16, t);
     assert_true(feq(out.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
     assert_true(out.resp_motion_valid);
@@ -610,7 +610,7 @@ static void test_breath_hold_clears_on_resume(void **state)
     RadarSample out = feed(&f, &held, 6, &t);
     assert_false(out.resp_motion);              /* in a hold */
 
-    RadarSample breathe = mk_amp(true, 600, 75.0f, 15.0f, 0, 3.0f);
+    RadarSample breathe = mk_amp(true, 600, 75.0f, 15.0f, 0, 8.0f);
     out = feed(&f, &breathe, 1, &t);            /* one breath clears it */
     assert_true(out.resp_motion);
     assert_true(out.breath_rpm > 0.0f);         /* rate shown again */

@@ -103,6 +103,11 @@ void radar_task(void *arg)
          * the two amplitude bands, and set RADAR_HOLD_AMP_MIN between them
          * (RESUME a little above).  Logged ~every 2 s while a valid amplitude
          * exists, and immediately whenever the hold state flips. */
+        /* Breath-hold observability (ADR-0006): the breath-phase amplitude that
+         * drives the RADAR_HOLD_AMP_* thresholds + the hold verdict, logged
+         * while a valid amplitude exists (throttled) and on every hold-state
+         * change.  Also the dev-console hook for re-tuning the thresholds if the
+         * radar module or its mounting changes. */
         static bool prev_hold = false;
         bool hold_now = sample.resp_motion_valid && !sample.resp_motion;
         if (raw.resp_motion_amp_valid &&

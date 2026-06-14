@@ -150,12 +150,14 @@
  * phase stream makes resp_motion_amp_valid false → resp_motion_valid false
  * (wire null), never a false hold.
  *
- * THRESHOLDS ARE HIL-TUNABLE: the breath-phase unit/scale is module-specific,
- * so RADAR_HOLD_AMP_MIN / _RESUME are placeholders.  radar_task logs the live
- * amplitude on the dev console — breathe vs hold on the bench, read the two
- * amplitude bands, set MIN between them and RESUME a little above MIN. */
-#define RADAR_HOLD_AMP_MIN      0.50f  /* p2p below this = no motion (HIL-TUNE)   */
-#define RADAR_HOLD_AMP_RESUME   1.00f  /* p2p above this clears a hold (HIL-TUNE) */
+ * THRESHOLDS ARE HIL-TUNABLE: the breath-phase unit/scale is module-specific.
+ * Bench-tuned on a live MR60BHA2 (2026-06-14): normal breathing windowed
+ * peak-to-peak amplitude ran ~6-9, a held/still chest ~0.5-1.6 — a wide, clean
+ * gap.  MIN sits below the breathing floor, RESUME above the dead zone so one
+ * real breath clears a hold.  radar_task / the bringup harness log the live
+ * amplitude on the dev console to re-tune if the module or mounting changes. */
+#define RADAR_HOLD_AMP_MIN      3.0f   /* p2p below this for CONFIRM_MS = no motion */
+#define RADAR_HOLD_AMP_RESUME   5.0f   /* p2p above this clears a hold (hysteresis) */
 #define RADAR_HOLD_CONFIRM_MS   5000U  /* sub-threshold this long ⇒ confirmed hold */
 
 /* Final robust vitals estimate (median + MAD outlier rejection), PER VITAL.

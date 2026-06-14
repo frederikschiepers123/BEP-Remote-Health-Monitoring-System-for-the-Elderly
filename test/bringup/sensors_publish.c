@@ -575,14 +575,18 @@ static int radar_sample_encode(char *buf, size_t cap,
     else                       snprintf(hb, sizeof(hb), "null");
     if (s->breath_rpm > 0.0f) snprintf(br, sizeof(br), "%.1f", (double)s->breath_rpm);
     else                       snprintf(br, sizeof(br), "null");
+    /* resp_motion tri-state (ADR-0006): null when not judged, else true/false.
+     * Matches json_encode_radar() on the production path. */
+    const char *motion = !s->resp_motion_valid ? "null"
+                       : (s->resp_motion ? "true" : "false");
 
     int n = snprintf(buf, cap,
         "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%u,\"q\":%u,"
         "\"v\":{\"presence\":%s,\"distance_mm\":%s,"
-              "\"breath_bpm\":%s,\"heart_bpm\":%s}}",
+              "\"breath_bpm\":%s,\"heart_bpm\":%s,\"resp_motion\":%s}}",
         (unsigned long long)ts_us, (long long)wall_ms,
         (unsigned)seq, (unsigned)q,
-        s->presence ? "true" : "false", dist, br, hb);
+        s->presence ? "true" : "false", dist, br, hb, motion);
     return (n > 0 && (size_t)n < cap) ? n : -1;
 }
 
@@ -642,10 +646,14 @@ static void publish_radar_sample(void)
     if (q != 3) {
         /* q==2 = filter still validating (ADR-0005) — print it too so the
          * console shows the confirm windows progressing, not just the lock. */
-        printf("[bringup] radar pres=%d dist=%lumm BR=%.1f HR=%.1f q=%u seq=%u\n",
+        /* motion: breath-hold verdict (ADR-0006) — yes=breathing, HOLD=no
+         * respiratory motion, - =not judged; amp = breath-phase p2p (kept for
+         * re-tuning RADAR_HOLD_AMP_* on the PCB). */
+        printf("[bringup] radar pres=%d dist=%lumm BR=%.1f HR=%.1f motion=%s amp=%.1f q=%u seq=%u\n",
                (int)s.presence, (unsigned long)s.distance_mm,
-               (double)s.breath_rpm, (double)s.heart_bpm, q,
-               (unsigned)s_radar_seq);
+               (double)s.breath_rpm, (double)s.heart_bpm,
+               s.resp_motion_valid ? (s.resp_motion ? "yes" : "HOLD") : "-",
+               (double)raw.resp_motion_amp, q, (unsigned)s_radar_seq);
     }
 #if OLED_ON
     s_disp_heart   = s.heart_bpm;
