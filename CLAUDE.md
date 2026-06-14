@@ -591,10 +591,18 @@ period (~5–10 min) after power-up; readings during that window have `q=2`.
 
 **radar** (`rmms/<uuid>/radar`):
 ```json
-{"presence":true,"distance_mm":2400,"breath_bpm":16.5,"heart_bpm":72.0}
+{"presence":true,"distance_mm":2400,"breath_bpm":16.5,"heart_bpm":72.0,"resp_motion":true}
 ```
 Any field except `presence` may be `null` if the radar driver did not produce
 a reading in this cycle (e.g., heart rate is only sampled every Nth frame).
+- `resp_motion` (ADR-0006) is phase-based breath-hold detection: `true` =
+  chest motion present, `false` = no respiratory motion (possible breath-hold,
+  and `breath_bpm` is nulled for that sample), `null` = undetermined (no
+  presence/distance lock, or no valid breath-phase amplitude). The breath
+  *rate* is a windowed frequency that cannot fall during a hold; this field
+  carries the hold signal the rate cannot. It is a suspected indicator, not a
+  clinical apnea alarm (clinical sign-off required per §9.5). Always present
+  per §9.2.3.
 
 **light** (`rmms/<uuid>/light`):
 ```json
@@ -733,7 +741,7 @@ operator ──JSON──► rmms/<uuid>/screen   ──►  broker  ──► M
 | Tile | Source field(s) | Display |
 |---|---|---|
 | Heart rate | `radar.v.heart_bpm` | numeric BPM + severity check |
-| Breath rate | `radar.v.breath_bpm` | numeric RPM + severity check |
+| Breath rate | `radar.v.breath_bpm` (+ `radar.v.resp_motion`) | numeric RPM + severity check; shows "No breathing" when `resp_motion` is `false` (ADR-0006 breath-hold) |
 | Temperature | `env.v.temp_c` | numeric °C + severity check |
 | Humidity | `env.v.hum_pct` | numeric % + severity check |
 | Air quality | `air.v.aqi` (1–5) | severity check only (no number) |
@@ -802,6 +810,7 @@ canonical mapping table lives at the top of
 | `rmms/<uuid>/air.v.tvoc_ppb` | `sensors/tvoc` | int |
 | `rmms/<uuid>/radar.v.heart_bpm` | `sensors/heartrate` | int, rounded |
 | `rmms/<uuid>/radar.v.breath_bpm` | `sensors/respiratoryrate` | int, rounded |
+| `rmms/<uuid>/radar.v.resp_motion` | `sensors/respiratorymotion` | `"true"`/`"false"`/`""` (ADR-0006 breath-hold) |
 | `rmms/<uuid>/info.v.text` | `sensors/infomessage` | text |
 | `rmms/<uuid>/status` (retained) | `sensors/status` | `"online"`/`"offline"` |
 
@@ -853,6 +862,7 @@ context the Radxa already has. The mapping:
 | `<uuid>` (from topic) | `device.reference` → `Device/<uuid>` | Radxa provisions the `Device` FHIR resource once at deployment |
 | (Radxa local DB) | `subject.reference` → `Patient/<id>` | Radxa holds the `device_uuid → patient_id` binding; never on the MCU |
 | `v.<field>` (sensor value) | `valueQuantity.value` + `unit` + `system` + `code` | Radxa applies UCUM mapping per sensor field |
+| `v.resp_motion` (ADR-0006) | (Radxa decides) | **TBD.** Phase-based breath-hold / no-respiratory-motion signal (tri-state true/false/null). No widely-adopted LOINC; the Radxa team picks a SNOMED respiratory-observation or custom URN when wiring it. Until then it is mirror-only and the SBC may ignore it. A `false` co-occurs with a nulled `breath_bpm` for the same sample. |
 | `q` (quality flag) | `status` | `0→final`, `1→preliminary`, `2→preliminary`, `3→entered-in-error` (or drop) |
 | `wall_ms` (if ≠ `-1`) | `effectiveDateTime` | If `-1` (no RTC sync), Radxa substitutes `received_at − estimated_latency` and sets `status: preliminary` regardless of `q` |
 | `seq` | `identifier[]` with system `urn:rmms:seq` | For deduplication / idempotency on resubmit |

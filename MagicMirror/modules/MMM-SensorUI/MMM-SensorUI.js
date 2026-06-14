@@ -55,6 +55,12 @@ Module.register("MMM-SensorUI", {
     this.respiratoryRate = "...";
     this.respiratoryRateTL = "green";
 
+    /* Phase-based breath-hold detection (firmware ADR-0006, forwarded as
+     * sensors/respiratorymotion). "false" = the radar sees no chest motion
+     * while a person is present → show a "No breathing" state on the breath
+     * tile instead of the (then-suppressed) rate. "true"/"" = normal. */
+    this.respiratoryMotion = "";
+
     this.temperature = "...";
     this.temperatureTL = "green";
     this.humidity = "...";
@@ -118,8 +124,12 @@ Module.register("MMM-SensorUI", {
     // combined measuring panel.
     const heartReady  = hasValue(this.heartRate);
     const breathReady = hasValue(this.respiratoryRate);
+    // A confirmed breath-hold (resp_motion=false) is itself a vitals reading,
+    // so the breath tile is never "blank" while it holds — keep us out of the
+    // combined "Measuring..." panel even if both rate numbers are absent.
+    const breathHold  = this.respiratoryMotion === "false";
 
-    if (!heartReady && !breathReady) {
+    if (!heartReady && !breathReady && !breathHold) {
 
       vitalWrapper.classList.add("measuringMode");
 
@@ -147,12 +157,18 @@ Module.register("MMM-SensorUI", {
           : createMeasuringCard("fa-heart-pulse")
       );
 
-      vitalWrapper.appendChild(
-        breathReady
-          ? createStatusCard("fa-lungs", this.respiratoryRate,
-                             "breaths<br>per min", this.respiratoryRateTL)
-          : createMeasuringCard("fa-lungs")
-      );
+      // Breath tile precedence: a confirmed hold overrides the rate (which the
+      // firmware nulls during a hold), then a live rate, then "Measuring...".
+      let breathCard;
+      if (breathHold) {
+        breathCard = createStatusCard("fa-lungs", "No breathing", "", "red", true);
+      } else if (breathReady) {
+        breathCard = createStatusCard("fa-lungs", this.respiratoryRate,
+                                      "breaths<br>per min", this.respiratoryRateTL);
+      } else {
+        breathCard = createMeasuringCard("fa-lungs");
+      }
+      vitalWrapper.appendChild(breathCard);
     }
 
     /*
@@ -291,7 +307,8 @@ notificationReceived: function(notification, payload, sender) {
            * environmentals are tracked separately (two footer lines). */
           if (payload.message !== "") {
               if (payload.topic === "sensors/heartrate" ||
-                  payload.topic === "sensors/respiratoryrate") {
+                  payload.topic === "sensors/respiratoryrate" ||
+                  payload.topic === "sensors/respiratorymotion") {
                   this.lastVitalAt = new Date();
               } else if (payload.topic === "sensors/temperature" ||
                          payload.topic === "sensors/humidity" ||
@@ -320,6 +337,11 @@ notificationReceived: function(notification, payload, sender) {
                   this.respiratoryRate,
                   THRESHOLDS.respiratoryRate
                 );
+          }
+          if (payload.topic === "sensors/respiratorymotion") {
+              // "true" / "false" / "" (undetermined). getDom shows a
+              // "No breathing" tile when this is "false" (ADR-0006).
+              this.respiratoryMotion = payload.message;
           }
           if (payload.topic === "sensors/temperature") {
               this.temperature = payload.message;

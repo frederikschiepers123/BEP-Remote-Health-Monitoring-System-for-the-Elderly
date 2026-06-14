@@ -101,10 +101,19 @@ Inner `v` object:
 {
   "presence":    bool,      # true if a person is detected
   "distance_mm": uint32,   # distance to closest target in mm; 0 = not reported by this radar
-  "breath_rpm":  float32,  # breathing rate in breaths per minute; 0.0 = not reported
-  "heart_bpm":   float32   # heart rate in beats per minute; 0.0 = not reported
+  "breath_bpm":  float32,  # breathing rate in breaths per minute; null = not reported / suppressed during a hold
+  "heart_bpm":   float32,  # heart rate in beats per minute; null = not reported
+  "resp_motion": bool|null # ADR-0006: chest motion present; false = possible breath-hold; null = undetermined
 }
 ```
+
+`resp_motion` (ADR-0006) is phase-based breath-hold detection. The breath
+*rate* is a windowed frequency that cannot fall during a hold, so the firmware
+detects "no respiratory motion" from the radar's raw breath-phase amplitude and
+reports it here: `true` = chest motion seen, `false` = possible breath-hold
+(and `breath_bpm` is nulled for that sample), `null` = could not judge (no
+presence/distance lock, or no valid phase amplitude). It is a suspected
+indicator, not a clinical apnea alarm. Radxa/FHIR mapping is TBD (see §9.6).
 
 Quality flag notes:
 - `q=2` (degraded): presence is asserted but vital signs are implausibly low (ghost-detection heuristic).  Radxa should apply additional filtering before clinical use.
@@ -119,8 +128,9 @@ Example:
   "v": {
     "presence":    true,
     "distance_mm": 1200,
-    "breath_rpm":  15.0,
-    "heart_bpm":   72.0
+    "breath_bpm":  15.0,
+    "heart_bpm":   72.0,
+    "resp_motion": true
   },
   "q": 0
 }

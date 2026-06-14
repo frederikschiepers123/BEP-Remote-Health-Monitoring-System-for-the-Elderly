@@ -29,6 +29,7 @@ What becomes easier or harder?
 | [0003](0003-nv-flash-spool-and-time-sync.md) | Non-volatile flash spool + tablet time-sync (lossless uplink) | Accepted |
 | [0004](0004-localhost-plain-listener-app-ipc.md) | Localhost-only plain :1883 listener for on-tablet app IPC | Accepted |
 | [0005](0005-mcu-side-radar-filtering.md) | MCU-side radar plausibility filtering (supervisor-directed) | Accepted |
+| [0006](0006-phase-based-breath-hold-detection.md) | Phase-based breath-hold (apnea) detection (resp_motion) | Accepted |
 
 ## When to write an ADR
 

@@ -4,11 +4,15 @@
 services:
   hapi:
     image: hapiproject/hapi:v7.4.0
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
       - hapi.fhir.fhir_version=R4
       - hapi.fhir.validation.requests_enabled=true
+      # Cap the JVM heap so HAPI fits on a 2 GB RockPro64 (the PoC SBC); 1 GB is
+      # ample for demo volumes and is harmless on a bigger board or a laptop.
+      - JAVA_TOOL_OPTIONS=-Xmx1024m
 
   aggregator:
     # Point the service at the dev HAPI; OAuth disabled (token URL empty).

@@ -77,16 +77,20 @@ int json_encode_radar(char *buf, size_t cap,
         (void)snprintf(heart_str,  sizeof(heart_str),  "%.1f", (double)v->heart_bpm);
     }
 
+    /* resp_motion tri-state (ADR-0006): -1 → null, 0 → false, 1 → true. */
+    const char *motion_str = (v->resp_motion < 0) ? "null"
+                           : (v->resp_motion == 0) ? "false" : "true";
+
     return snprintf(buf, cap,
         "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%lu,\"q\":%u,"
         "\"v\":{\"presence\":%s,\"distance_mm\":%s,"
-        "\"breath_bpm\":%s,\"heart_bpm\":%s}}",
+        "\"breath_bpm\":%s,\"heart_bpm\":%s,\"resp_motion\":%s}}",
         (unsigned long long)ts_us,
         (long long)wall_ms,
         (unsigned long)seq,
         (unsigned)q,
         v->presence ? "true" : "false",
-        dist_str, breath_str, heart_str);
+        dist_str, breath_str, heart_str, motion_str);
 }
 
 int json_encode_light(char *buf, size_t cap,

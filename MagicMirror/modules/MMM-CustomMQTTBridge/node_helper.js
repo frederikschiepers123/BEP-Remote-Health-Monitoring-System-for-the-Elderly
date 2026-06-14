@@ -17,6 +17,7 @@
  *                      v.tvoc_ppb         sensors/tvoc            int
  *   rmms/<uuid>/radar  v.heart_bpm        sensors/heartrate       int, rounded
  *                      v.breath_bpm       sensors/respiratoryrate int, rounded
+ *                      v.resp_motion      sensors/respiratorymotion "true"/"false"/"" (ADR-0006)
  *   rmms/<uuid>/info   v.text             sensors/infomessage     text
  *   rmms/<uuid>/status (raw string)       sensors/status          "online"/"offline"
  *   rmms/<uuid>/light  ignored in v1
@@ -178,6 +179,13 @@ module.exports = NodeHelper.create({
                 // freezing the last number after the person walks away.
                 send("heartrate",       v.heart_bpm  != null ? Math.round(Number(v.heart_bpm)).toString()  : "");
                 send("respiratoryrate", v.breath_bpm != null ? Math.round(Number(v.breath_bpm)).toString() : "");
+                // Phase-based breath-hold (ADR-0006): resp_motion is a tri-state
+                // (true = chest motion, false = possible breath-hold, null =
+                // undetermined). Forward as a string; "" clears the hold state.
+                // Old firmware without the field sends undefined → "" → no hold.
+                const motion = v.resp_motion;
+                send("respiratorymotion",
+                     motion === true ? "true" : motion === false ? "false" : "");
             } else if (kind === "info") {
                 if (v.text != null) send("infomessage", v.text);
             }

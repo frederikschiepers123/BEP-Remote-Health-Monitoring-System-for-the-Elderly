@@ -41,6 +41,8 @@ typedef struct {
     int   distance_mm;   /* -1 if not measured */
     float breath_bpm;    /* -1.0f if not measured */
     float heart_bpm;     /* -1.0f if not measured */
+    int   resp_motion;   /* respiratory motion (ADR-0006): -1 null, 0 false
+                          * (possible breath-hold), 1 true (motion present) */
 } JsonRadarBody;
 
 typedef struct {

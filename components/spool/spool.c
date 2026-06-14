@@ -27,7 +27,10 @@
 
 /* ── On-flash geometry ───────────────────────────────────────────────────── */
 
-#define SPOOL_MAGIC       0x524D5331u           /* "RMS1" — record-valid marker  */
+#define SPOOL_MAGIC       0x524D5332u           /* "RMS2" — record-valid marker
+                                                  * (bumped: radar body layout
+                                                  * changed for resp_motion,
+                                                  * ADR-0006)                     */
 #define SPOOL_SLOT_SIZE   FLASH_PAGE_SIZE        /* one record per flash page     */
 #define SPOOL_S           (FLASH_SECTOR_SIZE / SPOOL_SLOT_SIZE)   /* slots/sector */
 #define SPOOL_N           (SPOOL_FLASH_SIZE / SPOOL_SLOT_SIZE)    /* total slots  */
@@ -322,7 +325,15 @@ void spool_make_air(SpoolRecord *r, const Ens160Sample *v, uint8_t q,
 void spool_make_radar(SpoolRecord *r, const RadarSample *v, uint8_t q,
                       uint64_t ts_us, int64_t wall_ms, uint32_t seq) {
     make_common(r, SPOOL_KIND_RADAR, q, ts_us, wall_ms, seq);
-    r->body.radar = *v;
+    /* Persist only the wire fields (SpoolRadarBody), not the driver-internal
+     * breath-phase amplitude on RadarSample (ADR-0006). */
+    r->body.radar.breath_rpm  = v->breath_rpm;
+    r->body.radar.heart_bpm   = v->heart_bpm;
+    r->body.radar.distance_mm = v->distance_mm;
+    r->body.radar.presence    = v->presence;
+    r->body.radar.resp_motion = v->resp_motion_valid
+                                    ? (v->resp_motion ? 1 : 0)
+                                    : -1;
 }
 void spool_make_light(SpoolRecord *r, const LightSample *v, uint8_t q,
                       uint64_t ts_us, int64_t wall_ms, uint32_t seq) {

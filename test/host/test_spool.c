@@ -75,7 +75,9 @@ static void test_fifo_order_and_values(void **state) {
                        .pressure_hpa = 1010.0f, .pressure_valid = true };
     Ens160Sample a = { .co2_ppm = 600, .tvoc_ppb = 300, .aqi = 2, .status = 0 };
     RadarSample  d = { .breath_rpm = 16.5f, .heart_bpm = 72.0f,
-                       .distance_mm = 2400, .presence = true, .q = 0 };
+                       .distance_mm = 2400, .presence = true, .q = 0,
+                       /* ADR-0006: valid motion ⇒ wire tri-state 1 (true). */
+                       .resp_motion = true, .resp_motion_valid = true };
     LightSample  l = { .lux = 123.5f };
 
     SpoolRecord r;
@@ -112,6 +114,7 @@ static void test_fifo_order_and_values(void **state) {
     assert_true(r.body.radar.heart_bpm == 72.0f);
     assert_true(r.body.radar.presence);
     assert_int_equal(r.body.radar.distance_mm, 2400);
+    assert_int_equal(r.body.radar.resp_motion, 1);   /* tri-state survives flash */
     assert_int_equal(spool_ack(ws), ERR_OK);
 
     assert_int_equal(spool_peek(&r, &ws), ERR_OK);

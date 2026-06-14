@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <math.h>
 
 /*
  * Seeed MR60BHA2 driver — 60 GHz heartbeat + breath detection.
@@ -37,9 +38,14 @@
  *   0x0A15  heart rate               4 B  (1 float, BPM)
  *   0x0A16  distance                 8 B  (u32 flag + float cm; flag==1 valid)
  *   0x0F09  human detected           1 B  (bool)
+ *   0x0A13  phase data               12 B (3 floats: [total][breath][heart])
+ *           — the breath phase (offset 4) is the chest-displacement signal we
+ *             use for phase-based breath-hold detection (ADR-0006).  Float
+ *             order confirmed against the Seeed/ESPHome driver; a wrong guess
+ *             is fail-safe (heart phase keeps swinging during a hold, so it
+ *             would simply never flag one).
  *
  * Frames we tolerate but skip:
- *   0x0A13  phase data               12 B (3 floats — informational)
  *   Anything else (firmware-version-dependent)
  *
  * The driver doesn't request frames — the module pushes them at its own
@@ -66,6 +72,17 @@
  * after this many ms without an update. */
 #define RADAR_STALE_MS    5000U
 
+/* Breath-phase amplitude window (ADR-0006).  The module streams the 0x0A13
+ * phase frame several Hz; we keep a rolling window of the BREATH phase and
+ * report its peak-to-peak amplitude so the filter can tell chest motion from a
+ * breath-hold.  The window must span at least one slow breath cycle (~6 s at
+ * 10 RPM) or a slow breath's own swing would read as "no motion". */
+#define BHA2_PHASE_WIN_MS      6000U  /* rolling amplitude window               */
+#define BHA2_PHASE_CAP         96U    /* ring capacity (covers 6 s up to ~16 Hz) */
+#define BHA2_PHASE_MIN_N       8U     /* fewer samples ⇒ amplitude not trusted  */
+#define BHA2_PHASE_FRESH_MS    1500U  /* newest sample older than this ⇒ invalid */
+#define BHA2_PHASE_MIN_SPAN_MS 4000U  /* window must span this before judging    */
+
 /* ── Driver context ──────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -82,6 +99,12 @@ typedef struct {
     bool     human_flag;
     uint32_t human_flag_at_ms;
     uint32_t last_any_frame_at_ms;
+
+    /* Rolling window of breath-phase samples for amplitude (ADR-0006). */
+    float    phase_val[BHA2_PHASE_CAP];
+    uint32_t phase_at_ms[BHA2_PHASE_CAP];
+    uint8_t  phase_head;     /* index of oldest entry */
+    uint8_t  phase_count;
 } Bha2Ctx;
 
 static Bha2Ctx s_bha2_ctx;
@@ -135,6 +158,60 @@ static bool read_byte(uart_inst_t *uart, uint8_t *out, uint32_t timeout_ms) {
     return true;
 }
 
+/* ── Breath-phase amplitude ring (ADR-0006) ──────────────────────────────── */
+
+static void phase_reset(Bha2Ctx *c) {
+    c->phase_head  = 0;
+    c->phase_count = 0;
+}
+
+static void phase_push(Bha2Ctx *c, float v, uint32_t t) {
+    if (!isfinite(v)) return;
+    if (c->phase_count == BHA2_PHASE_CAP) {           /* full: drop oldest */
+        c->phase_head = (uint8_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
+        c->phase_count--;
+    }
+    uint8_t idx = (uint8_t)((c->phase_head + c->phase_count) % BHA2_PHASE_CAP);
+    c->phase_val[idx]   = v;
+    c->phase_at_ms[idx] = t;
+    c->phase_count++;
+}
+
+/* Evict samples older than the window, then return the peak-to-peak amplitude
+ * of the remaining breath-phase values.  Sets *valid only when the window is
+ * well-formed: enough samples, the newest is fresh, and it spans long enough
+ * to contain a slow breath cycle (so a slow breath isn't mistaken for a hold).
+ * A stalled phase stream (UART dropout) ages out → *valid=false → no false
+ * hold. */
+static float phase_amplitude(Bha2Ctx *c, uint32_t now, bool *valid) {
+    while (c->phase_count > 0U &&
+           (uint32_t)(now - c->phase_at_ms[c->phase_head]) > BHA2_PHASE_WIN_MS) {
+        c->phase_head = (uint8_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
+        c->phase_count--;
+    }
+    *valid = false;
+    if (c->phase_count < BHA2_PHASE_MIN_N) {
+        return 0.0f;
+    }
+    uint8_t newest = (uint8_t)((c->phase_head + c->phase_count - 1U) % BHA2_PHASE_CAP);
+    if ((uint32_t)(now - c->phase_at_ms[newest]) > BHA2_PHASE_FRESH_MS) {
+        return 0.0f;
+    }
+    if ((uint32_t)(c->phase_at_ms[newest] - c->phase_at_ms[c->phase_head])
+            < BHA2_PHASE_MIN_SPAN_MS) {
+        return 0.0f;
+    }
+    float lo = c->phase_val[c->phase_head];
+    float hi = lo;
+    for (uint8_t i = 0; i < c->phase_count; i++) {
+        float x = c->phase_val[(c->phase_head + i) % BHA2_PHASE_CAP];
+        if (x < lo) lo = x;
+        if (x > hi) hi = x;
+    }
+    *valid = true;
+    return hi - lo;
+}
+
 /* ── Frame dispatch ──────────────────────────────────────────────────────── */
 
 static void handle_frame(Bha2Ctx *c, uint16_t type, const uint8_t *data,
@@ -181,9 +258,17 @@ static void handle_frame(Bha2Ctx *c, uint16_t type, const uint8_t *data,
         break;
 
     case TYPE_PHASE:
+        /* 3 little-endian floats: [total][breath][heart].  The breath phase
+         * (offset 4) is the chest-displacement signal; ring it for the
+         * amplitude used by phase-based breath-hold detection (ADR-0006). */
+        if (len >= 12) {
+            phase_push(c, le_float(data + 4), t);
+        }
+        break;
+
     default:
-        /* Phase + unknown types: just count them as activity for the
-         * staleness heuristic. */
+        /* Unknown types: just count them as activity for the staleness
+         * heuristic (handled by last_any_frame_at_ms above). */
         break;
     }
 }
@@ -268,6 +353,7 @@ static err_t bha2_init(void *ctx, uart_inst_t *uart) {
     c->human_flag = false;
     c->last_breath_at_ms = c->last_heart_at_ms = c->last_distance_at_ms =
         c->human_flag_at_ms = c->last_any_frame_at_ms = 0;
+    phase_reset(c);
 
     c->initialised = true;
     LOG_I("init OK on uart %p @ %u baud (BHA2 protocol)", (void *)uart,
@@ -310,6 +396,11 @@ static err_t bha2_read_sample(void *ctx, RadarSample *out, uint32_t timeout_ms) 
     /* Presence: trust the explicit 0x0F09 flag when fresh, otherwise derive
      * it from "anything arrived recently". */
     out->presence    = human_fresh ? c->human_flag : frames_fresh;
+
+    /* Breath-phase amplitude for the filter's hold detection (ADR-0006). */
+    bool amp_valid = false;
+    out->resp_motion_amp       = phase_amplitude(c, t, &amp_valid);
+    out->resp_motion_amp_valid = amp_valid;
 
     /* Quality:
      *  3 invalid  — no frames at all in this call AND no fresh latched values

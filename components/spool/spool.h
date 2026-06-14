@@ -48,14 +48,26 @@ typedef enum {
     SPOOL_KIND_LIGHT = 4,
 } SpoolKind;
 
+/* Radar body persisted on flash.  NOT the full RadarSample: the driver-internal
+ * breath-phase amplitude fields (RadarSample.resp_motion_amp*) never hit flash —
+ * only the wire fields do, which also keeps the body within the 16 B union
+ * (ADR-0006).  resp_motion is the wire tri-state: -1 null, 0 false, 1 true. */
+typedef struct {
+    float    breath_rpm;
+    float    heart_bpm;
+    uint32_t distance_mm;
+    bool     presence;
+    int8_t   resp_motion;
+} SpoolRadarBody;
+
 /* Sensor-specific body. Sized to the largest member (16 B). `raw` gives a
  * byte view and pins the union size for the on-flash layout. */
 typedef union {
-    EnvSample    env;
-    Ens160Sample air;
-    RadarSample  radar;
-    LightSample  light;
-    uint8_t      raw[16];
+    EnvSample      env;
+    Ens160Sample   air;
+    SpoolRadarBody radar;
+    LightSample    light;
+    uint8_t        raw[16];
 } SpoolBody;
 
 /* One on-flash record (56 bytes; stored at the start of a 256-byte flash page,

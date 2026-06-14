@@ -137,6 +137,27 @@
 #define RADAR_LIVE_FRESH_MS            10000U /* newest ≤ this → q=0           */
 #define RADAR_LIVE_STALE_MS            25000U /* newest > this → stop showing  */
 
+/* Phase-based breath-hold detection (ADR-0006).  The MR60BHA2's breath RATE is
+ * a windowed frequency that cannot fall during a breath-hold; the raw breath
+ * PHASE (chest displacement) DOES flatten.  The driver reports the recent
+ * breath-phase peak-to-peak amplitude (raw->resp_motion_amp /
+ * resp_motion_amp_valid); this stage thresholds it.  While present AND distance
+ * is locked AND the amplitude is valid: amplitude below RADAR_HOLD_AMP_MIN for
+ * ≥ RADAR_HOLD_CONFIRM_MS ⇒ "no respiratory motion" (possible hold) → the
+ * sample's breath_rpm is nulled and resp_motion is set false.  Hysteresis
+ * (RADAR_HOLD_AMP_RESUME > MIN) and the confirm window stop it flickering on
+ * the low-velocity moments at the top/bottom of a normal breath.  A stalled
+ * phase stream makes resp_motion_amp_valid false → resp_motion_valid false
+ * (wire null), never a false hold.
+ *
+ * THRESHOLDS ARE HIL-TUNABLE: the breath-phase unit/scale is module-specific,
+ * so RADAR_HOLD_AMP_MIN / _RESUME are placeholders.  radar_task logs the live
+ * amplitude on the dev console — breathe vs hold on the bench, read the two
+ * amplitude bands, set MIN between them and RESUME a little above MIN. */
+#define RADAR_HOLD_AMP_MIN      0.50f  /* p2p below this = no motion (HIL-TUNE)   */
+#define RADAR_HOLD_AMP_RESUME   1.00f  /* p2p above this clears a hold (HIL-TUNE) */
+#define RADAR_HOLD_CONFIRM_MS   5000U  /* sub-threshold this long ⇒ confirmed hold */
+
 /* Final robust vitals estimate (median + MAD outlier rejection), PER VITAL.
  * Window was 60 s in the reference, cut to 20 s after HIL: the MR60BHA2
  * alternates heart and breath bursts, so long simultaneous stability never
@@ -214,6 +235,10 @@ typedef struct {
     RadarVitalsEstimate   estimate;        /* latch target              */
     bool                  estimate_ready;  /* both latched, not taken   */
     uint32_t              last_est_sample_ms;  /* 0 = none yet          */
+    /* phase-based breath-hold detection (ADR-0006) */
+    bool                  hold_active;     /* debounced: chest motion absent */
+    bool                  hold_candidate;  /* sub-threshold run in progress  */
+    uint32_t              hold_candidate_ms;  /* when that run started        */
 } RadarFilter;
 
 /* ── API ──────────────────────────────────────────────────────────────────── */

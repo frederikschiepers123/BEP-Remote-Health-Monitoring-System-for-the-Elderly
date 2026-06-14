@@ -33,11 +33,22 @@ static RadarSample mk(bool pres, uint32_t dist_mm, float heart, float breath,
                       uint8_t q)
 {
     RadarSample s;
+    memset(&s, 0, sizeof(s));   /* zero the ADR-0006 resp_motion_* fields too */
     s.presence    = pres;
     s.distance_mm = dist_mm;
     s.heart_bpm   = heart;
     s.breath_rpm  = breath;
     s.q           = q;
+    return s;
+}
+
+/* Like mk() but with a valid breath-phase amplitude (ADR-0006 hold input). */
+static RadarSample mk_amp(bool pres, uint32_t dist_mm, float heart, float breath,
+                          uint8_t q, float amp)
+{
+    RadarSample s = mk(pres, dist_mm, heart, breath, q);
+    s.resp_motion_amp       = amp;
+    s.resp_motion_amp_valid = true;
     return s;
 }
 
@@ -539,6 +550,109 @@ static void test_decoupled_estimate_no_costability(void **state)
     assert_true(feq(est.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
 }
 
+/* ── Phase-based breath-hold detection (ADR-0006) ────────────────────────── */
+
+/* Drive the filter to a full present + distance + breath lock with motion
+ * present, returning the time cursor so the caller can continue. Asserts the
+ * locked state (breath shown, resp_motion=true). */
+static RadarSample lock_with_motion(RadarFilter *f, uint32_t *t)
+{
+    /* High amplitude (>RESUME) = clearly breathing. 16 s passes presence (10 s)
+     * + distance (6 s) gates and fills the breath ring (>=5 samples). */
+    RadarSample s = mk_amp(true, 600, 75.0f, 15.0f, 0, 3.0f);
+    RadarSample out = feed(f, &s, 16, t);
+    assert_true(feq(out.breath_rpm, 15.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+    assert_true(out.resp_motion_valid);
+    assert_true(out.resp_motion);            /* motion present */
+    return out;
+}
+
+/* A sustained low breath-phase amplitude (no chest motion) is reported as a
+ * breath-hold: resp_motion=false and breath_rpm nulled — even though the rate
+ * frames keep arriving (the rate stays flat during a hold, as on hardware). */
+static void test_breath_hold_detected(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    lock_with_motion(&f, &t);
+
+    /* Switch to no motion. Rate frames still flow at 15 (flat). */
+    RadarSample held = mk_amp(true, 600, 75.0f, 15.0f, 0, 0.1f);
+
+    /* < CONFIRM window: not yet a hold. */
+    RadarSample out = feed(&f, &held, 4, &t);   /* 4 s < 5 s confirm */
+    assert_true(out.resp_motion);               /* still motion */
+    assert_true(out.breath_rpm > 0.0f);         /* rate still shown */
+
+    /* crossing the confirm window flips it */
+    out = feed(&f, &held, 2, &t);               /* now >= 5 s sub-threshold */
+    assert_false(out.resp_motion);              /* hold detected */
+    assert_true(out.resp_motion_valid);
+    assert_true(feq(out.breath_rpm, 0.0f));     /* rate suppressed during hold */
+    assert_true(out.presence);                  /* person still present */
+    assert_int_equal(out.q, 0);                 /* heart fresh ⇒ ok, not degraded */
+}
+
+/* A real breath (amplitude past the resume threshold) clears a hold at once,
+ * and the rate returns. */
+static void test_breath_hold_clears_on_resume(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    lock_with_motion(&f, &t);
+    RadarSample held = mk_amp(true, 600, 75.0f, 15.0f, 0, 0.1f);
+    RadarSample out = feed(&f, &held, 6, &t);
+    assert_false(out.resp_motion);              /* in a hold */
+
+    RadarSample breathe = mk_amp(true, 600, 75.0f, 15.0f, 0, 3.0f);
+    out = feed(&f, &breathe, 1, &t);            /* one breath clears it */
+    assert_true(out.resp_motion);
+    assert_true(out.breath_rpm > 0.0f);         /* rate shown again */
+}
+
+/* Without a valid breath-phase amplitude (radar with no phase stream, or an
+ * aged-out window) the stage stays inert: resp_motion is null and the breath
+ * rate is untouched — no false hold. */
+static void test_no_hold_when_amp_invalid(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    /* Lock with plain mk() — resp_motion_amp_valid stays false throughout. */
+    RadarSample s = mk(true, 600, 75.0f, 15.0f, 0);
+    RadarSample out = feed(&f, &s, 20, &t);
+    assert_true(out.breath_rpm > 0.0f);         /* rate shown */
+    assert_false(out.resp_motion_valid);        /* wire: resp_motion null */
+}
+
+/* Loss of presence clears any hold and reports resp_motion null. */
+static void test_hold_cleared_on_absence(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    lock_with_motion(&f, &t);
+    RadarSample held = mk_amp(true, 600, 75.0f, 15.0f, 0, 0.1f);
+    RadarSample out = feed(&f, &held, 6, &t);
+    assert_false(out.resp_motion);              /* in a hold */
+
+    /* Person leaves: 8 s of no evidence drops presence. */
+    RadarSample empty = mk(false, 0, 0.0f, 0.0f, 0);
+    out = feed(&f, &empty, 9, &t);
+    assert_false(out.presence);
+    assert_false(out.resp_motion_valid);        /* not judged ⇒ null */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -558,6 +672,10 @@ int main(void)
         cmocka_unit_test(test_final_estimate_repeats_while_present),
         cmocka_unit_test(test_final_estimate_discarded_on_absence),
         cmocka_unit_test(test_decoupled_estimate_no_costability),
+        cmocka_unit_test(test_breath_hold_detected),
+        cmocka_unit_test(test_breath_hold_clears_on_resume),
+        cmocka_unit_test(test_no_hold_when_amp_invalid),
+        cmocka_unit_test(test_hold_cleared_on_absence),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

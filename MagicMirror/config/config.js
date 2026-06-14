@@ -70,7 +70,7 @@ let config = {
 			 * paths empty.
 			 */
 			config: {
-				broker:   "mqtts://172.20.10.14:8883",
+				broker:   "mqtts://192.168.2.30:8883",
 				clientId: "mirror-de4ed19a",
 				caFile:   process.env.HOME + "/projects/BEP-Remote-Health-Monitoring-System-for-the-Elderly/out/mirror-de4ed19a/ca.crt",
 				certFile: process.env.HOME + "/projects/BEP-Remote-Health-Monitoring-System-for-the-Elderly/out/mirror-de4ed19a/cert.pem",

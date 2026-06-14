@@ -28,6 +28,31 @@ typedef struct {
     uint32_t distance_mm;   /* Distance to target in mm; 0 = not reported */
     bool     presence;      /* True if a person is detected */
     uint8_t  q;             /* 0=ok, 2=degraded (ghost/noise), 3=invalid */
+
+    /* Respiratory chest-motion, for phase-based breath-hold detection
+     * (ADR-0006).  The breath RATE is a windowed frequency that cannot fall
+     * during a hold; the radar's raw breath-PHASE (chest displacement) does
+     * flatten, so its recent amplitude tells motion from no-motion.  These
+     * two field-pairs carry DIFFERENT things at the two stages of the pipe:
+     *
+     *   On a RAW driver sample (radar_driver_t read_sample output):
+     *     resp_motion_amp       = recent breath-phase peak-to-peak amplitude
+     *                             (driver units); 0 when not computed.
+     *     resp_motion_amp_valid = true when the driver had enough fresh phase
+     *                             samples to compute it.  A radar with no
+     *                             phase stream leaves this false → feature
+     *                             stays inert (graceful degradation).
+     *
+     *   On a FILTERED sample (radar_filter_apply output → queue/spool/wire):
+     *     resp_motion           = chest motion present (false = possible
+     *                             breath-hold).  Only meaningful when valid.
+     *     resp_motion_valid     = the decision is meaningful (present +
+     *                             distance-locked + a valid amplitude); when
+     *                             false the wire emits resp_motion: null. */
+    float    resp_motion_amp;       /* raw stage only */
+    bool     resp_motion_amp_valid; /* raw stage only */
+    bool     resp_motion;           /* filtered stage only */
+    bool     resp_motion_valid;     /* filtered stage only */
 } RadarSample;
 
 /* ── Driver vtable ───────────────────────────────────────────────────────── */

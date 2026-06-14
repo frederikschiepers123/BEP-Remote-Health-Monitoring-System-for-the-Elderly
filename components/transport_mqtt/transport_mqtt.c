@@ -607,6 +607,9 @@ static int encode_record(const SpoolRecord *r, char *buf, size_t cap)
             .distance_mm = (r->body.radar.distance_mm == 0u) ? -1 : (int)r->body.radar.distance_mm,
             .breath_bpm  = (r->body.radar.breath_rpm > 0.0f) ? r->body.radar.breath_rpm : -1.0f,
             .heart_bpm   = (r->body.radar.heart_bpm  > 0.0f) ? r->body.radar.heart_bpm  : -1.0f,
+            /* resp_motion (ADR-0006): already the wire tri-state in the spool
+             * body (-1 null / 0 false / 1 true). */
+            .resp_motion = r->body.radar.resp_motion,
         };
         return json_encode_radar(buf, cap, r->ts_us, r->wall_ms, r->seq, r->q, &b);
     }

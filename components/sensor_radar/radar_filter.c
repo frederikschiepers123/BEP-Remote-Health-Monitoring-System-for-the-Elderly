@@ -309,6 +309,9 @@ void radar_filter_init(RadarFilter *f)
     f->last_est_sample_ms = 0;
     ring_reset(&f->heart_live);
     ring_reset(&f->breath_live);
+    f->hold_active        = false;
+    f->hold_candidate     = false;
+    f->hold_candidate_ms  = 0;
 }
 
 void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
@@ -373,6 +376,37 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
     ring_evict_older(&f->heart_live,  now_ms, RADAR_LIVE_WIN_MS);
     ring_evict_older(&f->breath_live, now_ms, RADAR_LIVE_WIN_MS);
 
+    /* ── 3b. Phase-based breath-hold detection (ADR-0006) ─────────────────
+     * Judge the breath-phase amplitude only when we can trust it: presence +
+     * distance locked AND the driver produced a valid amplitude.  Hysteresis
+     * + a confirm window keep a normal breath's quiet moments from tripping a
+     * hold.  Outside that, clear the state so a returning subject starts
+     * fresh and the wire reports resp_motion: null. */
+    bool hold_input_ok = gating_open && raw->resp_motion_amp_valid;
+    if (!hold_input_ok) {
+        f->hold_candidate = false;
+        f->hold_active    = false;
+    } else if (!f->hold_active) {
+        if (raw->resp_motion_amp < RADAR_HOLD_AMP_MIN) {
+            if (!f->hold_candidate) {
+                f->hold_candidate    = true;
+                f->hold_candidate_ms = now_ms;
+            } else if ((uint32_t)(now_ms - f->hold_candidate_ms) >=
+                           RADAR_HOLD_CONFIRM_MS) {
+                f->hold_active = true;
+            }
+        } else {
+            f->hold_candidate = false;
+        }
+    } else {
+        /* In a hold: a single real breath (amplitude past the resume
+         * threshold) clears it immediately. */
+        if (raw->resp_motion_amp >= RADAR_HOLD_AMP_RESUME) {
+            f->hold_active    = false;
+            f->hold_candidate = false;
+        }
+    }
+
     /* ── 4. Compose the output sample ────────────────────────────────────── */
     out->presence    = f->presence.stable_present;
     out->distance_mm = svf_stable(&f->distance)
@@ -397,12 +431,25 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
     } else {
         out->heart_bpm = 0.0f;
     }
-    if (breath_live_ok) {
+    /* During a confirmed hold the breath rate is meaningless (and stale), so
+     * null it on the wire — we report "no respiratory motion" via resp_motion
+     * instead.  breath_published drives q below so the suppressed value is not
+     * counted as a fresh/stale published vital. */
+    bool breath_published = breath_live_ok && !f->hold_active;
+    if (breath_published) {
         float br = ring_median(&f->breath_live) - RADAR_BREATH_CAL_OFFSET_RPM;
         out->breath_rpm = (br > 0.0f) ? br : 0.0f;
     } else {
         out->breath_rpm = 0.0f;
     }
+
+    /* resp_motion: chest-motion present (false = possible breath-hold).  Only
+     * meaningful (valid) when we could judge it this cycle; otherwise the wire
+     * emits null. */
+    out->resp_motion       = hold_input_ok ? !f->hold_active : true;
+    out->resp_motion_valid = hold_input_ok;
+    out->resp_motion_amp       = 0.0f;   /* raw-stage field, unused downstream */
+    out->resp_motion_amp_valid = false;
 
     /* ── 5. Quality ──────────────────────────────────────────────────────
      * The envelope carries ONE q for a sample that may publish BOTH vitals,
@@ -417,9 +464,9 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
      *  3 — invalid input and nothing held by the filter                    */
     bool heart_stale  = heart_live_ok &&
         !ring_newest_within(&f->heart_live, now_ms, RADAR_LIVE_FRESH_MS);
-    bool breath_stale = breath_live_ok &&
+    bool breath_stale = breath_published &&
         !ring_newest_within(&f->breath_live, now_ms, RADAR_LIVE_FRESH_MS);
-    bool any_published = heart_live_ok || breath_live_ok;
+    bool any_published = heart_live_ok || breath_published;
     bool all_fresh     = any_published && !heart_stale && !breath_stale;
     bool validating = gate_warming_up(&f->presence) ||
                       (f->presence.stable_present && !all_fresh);

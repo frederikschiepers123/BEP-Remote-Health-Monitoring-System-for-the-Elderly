@@ -88,11 +88,29 @@ void radar_task(void *arg)
             raw.breath_rpm  = 0.0f;
             raw.heart_bpm   = 0.0f;
             raw.q           = 3;
+            raw.resp_motion_amp       = 0.0f;
+            raw.resp_motion_amp_valid = false;
         }
 
         RadarSample sample;
         radar_filter_apply(&filt, &raw,
                            to_ms_since_boot(get_absolute_time()), &sample);
+
+        /* Breath-phase amplitude + hold state for HIL tuning of the
+         * RADAR_HOLD_AMP_* thresholds (ADR-0006).  The breath-phase unit is
+         * module-specific, so the thresholds are placeholders until tuned:
+         * watch this line on the dev console, breathe vs hold your breath, read
+         * the two amplitude bands, and set RADAR_HOLD_AMP_MIN between them
+         * (RESUME a little above).  Logged ~every 2 s while a valid amplitude
+         * exists, and immediately whenever the hold state flips. */
+        static bool prev_hold = false;
+        bool hold_now = sample.resp_motion_valid && !sample.resp_motion;
+        if (raw.resp_motion_amp_valid &&
+            (seq % 4u == 0u || hold_now != prev_hold)) {
+            LOG_I("breath-phase amp=%.3f  hold=%s",
+                  (double)raw.resp_motion_amp, hold_now ? "YES" : "no");
+        }
+        prev_hold = hold_now;
 
         /* Robust vitals estimate — fires repeatedly while present, once both
          * per-vital windows refill (ADR-0005).  Dev-console only — the §9.1

@@ -9,29 +9,37 @@
 ## 1. Project context
 
 This repository contains the **aggregation service** for the Remote Medical
-Monitoring System (RMMS) — a TU Delft BSc Applied Project (BAP). It runs on a
-**Radxa Dragon Q6A** SBC (Qualcomm QCS6490, 8 GB RAM, Ubuntu 24.04 aarch64)
-deployed in a patient's home alongside the tablet/firmware stack.
+Monitoring System (RMMS) — a TU Delft BSc Applied Project (BAP). It runs on an
+aarch64 SBC in a patient's home alongside the tablet/firmware stack. For this
+project the SBC is a **Pine64 RockPro64** (RK3399, Ubuntu/Armbian aarch64),
+which is sufficient for the v1 aggregation + FHIR-translation workload. The
+**Radxa Dragon Q6A** (Qualcomm QCS6490, 12 TOPS Hexagon NPU) is the planned
+post-project upgrade for on-SBC AI — see the platform note below. The service is
+board-agnostic; nothing in it depends on which of the two is used.
 
 Three-tier system:
 
 ```
-Sensor Module ──► Tablet ──────────────► Radxa Dragon Q6A ──► Hospital FHIR endpoint
-   (firmware     (broker + UI)            (THIS REPO)         (HAPI for dev,
-   repo)                                                       real EHR for prod)
+Sensor Module ──► Tablet ──────────────► SBC (this repo) ──► Hospital FHIR endpoint
+   (firmware     (broker + UI)            RockPro64 now;      (HAPI for dev/PoC,
+   repo)                                  Radxa Q6A future)    real EHR for prod)
 ```
 
 This service:
-1. **Subscribes** to raw sensor JSON topics (`rmms/+/env`, `rmms/+/radar`,
-   `rmms/+/light`, `rmms/+/status`) on the tablet's Mosquitto broker over mTLS.
+1. **Subscribes** to raw sensor JSON topics (`rmms/+/env`, `rmms/+/air`,
+   `rmms/+/radar`, `rmms/+/light`, `rmms/+/status`) on the tablet's Mosquitto
+   broker over mTLS.
 2. **Aggregates and validates** samples, filtering on the quality flag.
 3. **Translates** sensor JSON samples into FHIR R4 `Observation` resources
    per the contract in the firmware repo's `CLAUDE.md §9.6`.
 4. **Posts** validated Observations (as `Bundle` transactions) to a configured
    FHIR endpoint, authenticating via OAuth 2.0 client credentials
    (SMART-on-FHIR backend services profile).
-5. **Republishes** UI-safe presentation topics to `rmms/ui/<uuid>/...` for
-   MagicMirror² consumption on the tablet.
+5. **Publishes** the tablet-clock time-sync topic `rmms/<uuid>/time/set` so the
+   firmware can stamp real timestamps (firmware §9.2.5 / ADR-0003). It does
+   **not** republish any UI topics: the MagicMirror² mirror subscribes to the
+   raw `rmms/<uuid>/...` topics directly and applies its own severity thresholds
+   in `MMM-SensorUI` (firmware §9.5). There is no `rmms/ui/...` namespace.
 6. **Buffers** locally in SQLite for resilience to FHIR-endpoint outages.
 
 This service implements two of the three BAP deliverables:
@@ -40,10 +48,15 @@ This service implements two of the three BAP deliverables:
 - "Update deployment script"
   → §13 below.
 
-Note that the original BAP assignment referenced a Pine RockPro64. This was
-replaced with the Radxa Dragon Q6A for the 12 TOPS Hexagon NPU (relevant for
-future ML workloads; not used in v1 — see §18 non-goals) and mainline Ubuntu
-support. The platform substitution does not change this service's behaviour.
+**Platform note.** The original BAP assignment referenced a Pine64 RockPro64,
+and that is the SBC this project deploys on: it is enough for v1, which does no
+on-device ML (see §18 non-goals). The **Radxa Dragon Q6A** is the intended
+post-project upgrade — its 12 TOPS Hexagon NPU is for future on-SBC AI workloads
+(e.g. the face-recognition / vitals analysis the MCU explicitly does not do).
+Because this service is board-agnostic, that future swap changes nothing here.
+Throughout this document "Radxa" and the `radxa-*` shorthand (cert CN,
+`radxa.pem`/`radxa.key`) survive as the SBC tier's label; they denote whichever
+board is deployed (RockPro64 today, Radxa Q6A later).
 
 The **previous BAP group's SBC software** is in scope as a cautionary tale,
 not a starting point. See `docs/technical-audit.md` §D.5 and §D.6 — they had
@@ -61,7 +74,7 @@ here` comments. This service exists specifically to fulfil what they did not.
                                 Tablet (Mosquitto :8883)
                                           │
                                           │ mTLS subscribe
-                                          │ rmms/+/env, rmms/+/radar,
+                                          │ rmms/+/env, rmms/+/air, rmms/+/radar,
                                           │ rmms/+/light, rmms/+/status
                                           ▼
                           ┌──────────────────────────────┐
@@ -74,50 +87,48 @@ here` comments. This service exists specifically to fulfil what they did not.
                           │  JSON decoder + domain types │
                           │  json (stdlib) → typed Sample│
                           └──────────────┬───────────────┘
-                                         │
+                                         ▼
+                          ┌──────────────────────────────┐
+                          │  FHIR builder                │
+                          │  Sample → Observation        │
+                          │  + LOINC + UCUM              │
+                          └──────────────┬───────────────┘
+                                         ▼
+                          ┌──────────────────────────────┐
+                          │  Local validation            │
+                          │  fhir.resources Pydantic     │
+                          │  + optional HAPI JAR         │
+                          └──────────────┬───────────────┘
                           ┌──────────────┴───────────────┐
                           ▼                              ▼
-            ┌──────────────────────────┐   ┌──────────────────────────┐
-            │  FHIR builder            │   │  UI publisher            │
-            │  Sample → Observation    │   │  Sample → UI topic JSON  │
-            │  + LOINC + UCUM          │   │  (qualitative only)      │
-            └──────────────┬───────────┘   └──────────────┬───────────┘
-                           │                              │ mTLS publish
-                           ▼                              ▼
-            ┌──────────────────────────┐         rmms/ui/<uuid>/presence
-            │  Local validation        │         rmms/ui/<uuid>/wellness
-            │  fhir.resources Pydantic │         rmms/ui/<uuid>/ambient
-            │  + optional HAPI JAR     │              ▲
-            └──────────────┬───────────┘              │
-                           │                          │ MagicMirror² subscribes
-                  ┌────────┴─────────┐                │
-                  ▼                  ▼                │
-            valid                invalid              │
-              │                    │                  │
-              ▼                    ▼                  │
-      ┌─────────────────┐   ┌─────────────────┐       │
-      │ SQLite buffer   │   │ Dead-letter     │       │
-      │ samples table   │   │ store (raw JSON │       │
-      │ status: pending │   │ + error)        │       │
-      └────────┬────────┘   └─────────────────┘       │
-               │                                      │
-               ▼                                      │
-      ┌─────────────────────────────────┐             │
-      │  FHIR client                    │             │
-      │  OAuth 2.0 client_credentials   │             │
-      │  POST /fhir Bundle (transaction)│             │
-      └────────┬────────────────────────┘             │
-               │                                      │
-        ┌──────┴────────┐                             │
-        ▼               ▼                             │
-     success         failure                          │
-        │               │                             │
-        ▼               ▼                             │
-    mark sent      retry queue                        │
-                   (exp. backoff)                     │
-                                                      │
-                                                      │
-              Tablet Mosquitto ◄────────────── (republished UI topics)
+                    valid                            invalid
+                      │                                │
+                      ▼                                ▼
+              ┌─────────────────┐              ┌─────────────────┐
+              │ SQLite buffer   │              │ Dead-letter     │
+              │ samples table   │              │ store (raw JSON │
+              │ status: pending │              │ + error)        │
+              └────────┬────────┘              └─────────────────┘
+                       ▼
+              ┌─────────────────────────────────┐
+              │  FHIR client                    │
+              │  OAuth 2.0 client_credentials   │
+              │  POST /fhir Bundle (transaction)│
+              └────────┬────────────────────────┘
+                ┌──────┴────────┐
+                ▼               ▼
+             success         failure
+                │               │
+                ▼               ▼
+            mark sent     retry queue (exp. backoff) → dead-letter
+
+  Outbound MQTT — the ONLY thing the SBC publishes: on a device's retained
+  status="online", publish rmms/<uuid>/time/set (tablet clock) so the firmware
+  can stamp real timestamps (firmware §9.2.5 / ADR-0003).
+
+  UI is NOT on this path. MagicMirror² subscribes to the RAW rmms/<uuid>/...
+  topics on the tablet broker directly and applies its own severity thresholds
+  in MMM-SensorUI (firmware §9.5). The SBC publishes no rmms/ui/... namespace.
 ```
 
 ### 2.2 Service boundaries
@@ -128,15 +139,18 @@ This service **owns**:
 - FHIR R4 Observation construction with proper LOINC/UCUM coding.
 - OAuth 2.0 authentication to the hospital FHIR endpoint.
 - Local persistence (SQLite) and dead-letter handling.
-- Clinical-threshold logic (e.g., "is heart rate in normal range?") — this is
-  where it lives, not on the MCU and not in MagicMirror².
-- UI-safe topic publication for MagicMirror².
+- Tablet-clock time-sync: publishing `rmms/<uuid>/time/set` (firmware §9.2.5).
 
 This service **does not own**:
 - Sensor sampling, frame parsing, or MQTT publishing of raw data
   (→ firmware repo).
 - The MQTT broker itself (→ tablet repo).
 - The MagicMirror² front-end (→ tablet repo).
+- **Display severity thresholds** (green/yellow/orange/red) and any
+  `rmms/ui/...` republish. The mirror subscribes to the raw topics and applies
+  thresholds itself in `MMM-SensorUI` (firmware §9.5); the `rmms/ui/...`
+  namespace is retired (see §11). v1 produces no clinical *interpretations* —
+  the hospital's clinical system does (§8.2).
 - The hospital's FHIR server itself (HAPI for dev, real EHR for production).
 
 ### 2.3 Relationship to firmware repo
@@ -209,7 +223,7 @@ about what's pulled in matters for auditability and image size.
 │   ├── mqtt/
 │   │   ├── client.py               # paho-mqtt wrapper, mTLS context
 │   │   ├── subscriber.py           # topic dispatch, JSON decode
-│   │   └── publisher.py            # for UI republishing (§11)
+│   │   └── publisher.py            # tablet-clock time-sync publisher (§9.2.5)
 │   │
 │   ├── domain/
 │   │   ├── sample.py               # typed sensor-sample dataclasses
@@ -228,9 +242,6 @@ about what's pulled in matters for auditability and image size.
 │   │   ├── models.py               # SQLAlchemy models (§10)
 │   │   ├── repository.py           # queries
 │   │   └── migrations/             # Alembic
-│   │
-│   ├── ui/
-│   │   └── publisher.py            # raw vitals → qualitative UI topics
 │   │
 │   ├── retry/
 │   │   └── deadletter.py           # retry queue, exponential backoff
@@ -311,6 +322,7 @@ to no-auth.
 
 ```
 rmms/+/env       QoS 1
+rmms/+/air       QoS 1
 rmms/+/radar     QoS 1
 rmms/+/light     QoS 1
 rmms/+/status    QoS 1   (retained — captures device state on (re)connect)
@@ -636,40 +648,31 @@ storage becomes an issue, that's a future ADR.
 
 ---
 
-## 11. UI publisher
+## 11. UI publisher — RETIRED (no `rmms/ui/...` namespace)
 
-### 11.1 Topic schema
+**There is no UI-republish layer in this service, and no `rmms/ui/...` topics.**
+This section is kept to record the decision and stop the idea reappearing.
 
-This service publishes to `rmms/ui/<uuid>/...` for MagicMirror² consumption.
-The schema is JSON, consistent with the firmware → broker leg. MagicMirror²
-modules expect JSON; the Radxa is the format-stable layer for both upstream
-and downstream consumers.
+An earlier design had the SBC republish qualitative, pre-thresholded
+presentation topics (`rmms/ui/<uuid>/presence|wellness|ambient|...`) for
+MagicMirror² to render. That was **superseded** by the mirror-side architecture
+in the firmware repo's `CLAUDE.md §9.5`: MagicMirror² subscribes to the **raw**
+`rmms/<uuid>/...` topics on the tablet broker directly (via
+`MMM-CustomMQTTBridge`) and applies the green/yellow/orange/red **display**
+thresholds itself, in JavaScript, inside `MMM-SensorUI`. The firmware repo is
+authoritative on the wire contract (§2.3), so this service follows it: no
+`rmms/ui/...` publish, no `ui/` package.
 
-| Topic | Payload | When published |
-|---|---|---|
-| `rmms/ui/<uuid>/presence` | `{"present": true, "confidence": "high"\|"medium"\|"low"}` | On radar presence change |
-| `rmms/ui/<uuid>/wellness` | `{"status": "ok"\|"check"\|"alert", "since_ms": 12345}` | On clinical-threshold cross |
-| `rmms/ui/<uuid>/ambient` | `{"temp": "comfortable"\|"warm"\|"cold", "air": "good"\|"poor"}` | On env change |
-| `rmms/ui/<uuid>/connection`  | `{"online": true, "last_seen_ms": 12345}` | On status topic change |
-| `rmms/ui/<uuid>/heart_rate`  | `{"bpm": 72.0}` | On every radar sample with valid heart_bpm |
-| `rmms/ui/<uuid>/temperature` | `{"temp_c": 21.5}` | On every env sample |
-
-**Mostly qualitative, with two numeric exceptions.** Heart rate (`bpm`) and
-temperature (`temp_c`) are published as exact numeric values by explicit
-project decision. All other raw vitals (breath rate, humidity, pressure, lux,
-distance) remain qualitative. Numeric vitals also go to the hospital FHIR
-endpoint via the standard pipeline.
-
-### 11.2 Threshold logic
-
-Clinical thresholds (resting heart rate range, respiratory rate ranges,
-ambient temp comfort zone) live in `ui/publisher.py` as named constants.
-Document their source in inline comments — these are clinical decisions,
-not arbitrary numbers.
-
-For BAP scope, use thresholds from a published guideline (NHG-Standaard
-Hartfalen for cardiac, Dutch comfort temperature standards) and cite them
-in the thesis. **Do not invent thresholds.**
+Consequences for this service:
+- The **only** outbound MQTT it publishes is `rmms/<uuid>/time/set` (§9.2.5),
+  handled by `mqtt/publisher.py`. There is no `ui/publisher.py`.
+- **Display** thresholds live on the mirror, not here. This service produces no
+  clinical *interpretations* in v1 either — the hospital's clinical system does
+  (§8.2); Observations are coded measurements, not `interpretation`-coded alerts.
+- If a future requirement needs SBC-side derived/interpreted topics (e.g. once
+  the Radxa Q6A NPU does on-device analysis), that is a **new** topic contract
+  agreed with the firmware + mirror teams and written as an ADR — it does **not**
+  revive the old `rmms/ui/...` namespace by default.
 
 ---
 
@@ -938,13 +941,15 @@ slow drain paths.
    verify token caching and refresh.
 9. **Dead-letter** — kill HAPI mid-run, observe queue grow; restart HAPI,
    trigger re-drive, verify backlog clears.
-10. **UI publisher** — verify `rmms/ui/<uuid>/*` topics receive expected
-    qualitative JSON, MagicMirror² (or `mosquitto_sub`) sees them.
+10. **Time-sync publisher** — on a device's retained `status="online"`, verify
+    the SBC publishes `rmms/<uuid>/time/set` (`mosquitto_sub -t 'rmms/+/time/set'`)
+    and the firmware then stamps real `wall_ms`. There is no `rmms/ui/...` step —
+    the mirror reads the raw topics directly (§11).
 11. **systemd unit** — install the service, verify `systemctl status`,
     `journalctl -u rmms-aggregator -f` shows clean logs.
 12. **Provisioning CLI** — exercise `rmms-provision patient`, `device`,
     `bind`, verify FHIR resources created and SQLite binding stored.
-13. **48-hour soak** on the Radxa hardware.
+13. **48-hour soak** on the SBC hardware (RockPro64 for the PoC).
 
 ---
 
@@ -957,15 +962,19 @@ slow drain paths.
 2. **Dutch profile conformance.** Do we apply `nl-core-Observation`
    profile constraints? If yes, run HAPI with the NL package loaded and
    validate. If no, document that as a v1 limitation.
-3. **Clinical thresholds source.** Which guideline drives the
-   `wellness=ok|check|alert` mapping? NHG-Standaard? An expert from the TU
-   Delft medical faculty? **Do not invent thresholds.**
-4. **MagicMirror² module choice.** MMM-MQTT direct, or a custom MMM-RMMS
-   module wrapping it? See tablet repo's CLAUDE.md for the answer (this
-   service must match whatever schema is chosen there).
-5. **RTC sync mechanism.** See firmware repo §16 question 6. This service
-   must implement the corresponding `rmms/<uuid>/time/set` publisher if
-   that path is chosen.
+3. ~~**Clinical thresholds source.**~~ **Moved to the mirror.** The
+   green/yellow/orange/red *display* thresholds live in `MMM-SensorUI`
+   (firmware §9.5), not in this service — §11 is retired. A guideline still
+   needs citing for those ranges, but that is a mirror/thesis task; this
+   service produces no `wellness` mapping.
+4. ~~**MagicMirror² module choice.**~~ **Resolved.** The mirror uses
+   `MMM-CustomMQTTBridge` + `MMM-SensorUI` subscribing to the **raw**
+   `rmms/<uuid>/...` topics directly (firmware §9.5). There is no SBC-side UI
+   schema for this service to match — see §11.
+5. ~~**RTC sync mechanism.**~~ **Resolved (firmware ADR-0003).** The
+   `rmms/<uuid>/time/set` path is chosen and implemented here
+   (`mqtt/publisher.py`): on a device's retained `status="online"` the SBC
+   publishes the tablet wall clock, retained at QoS 1.
 6. **BSN handling for non-demo.** If the BAP demo escalates to a real
    patient pilot, BSN handling requires legal/ethics review. Out of scope
    for v1, but document the boundary in the thesis.
@@ -974,7 +983,9 @@ slow drain paths.
 
 ## 18. Non-goals (v1)
 
-- ML / NPU usage. The Hexagon NPU is available but no v1 workload uses it.
+- On-device ML / AI. v1 does pure aggregation + FHIR translation; the PoC SBC
+  (RockPro64) has no NPU. On-SBC AI (the Radxa Q6A's 12 TOPS Hexagon NPU) is the
+  planned post-project direction, not a v1 workload — see §1.
 - Real-time vital sign analysis (rhythm classification, fall detection,
   etc.). The Radxa forwards qualified observations; clinical analysis is
   the hospital's job.

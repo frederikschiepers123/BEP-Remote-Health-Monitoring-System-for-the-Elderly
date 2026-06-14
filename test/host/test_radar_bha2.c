@@ -64,6 +64,32 @@ static RadarSample drive(const uint8_t *frames, size_t len) {
     return s;
 }
 
+/* Drive `n` 0x0A13 phase frames `step_ms` apart, breath phase taken from
+ * vals[], and return the final sample's amplitude fields. The clock is jumped
+ * forward each round (then auto-advance re-enabled so read_sample still hits
+ * its deadline) so the samples span real time — the driver's amplitude window
+ * needs a multi-second span (ADR-0006). */
+static RadarSample drive_phase(const float *vals, int n, uint32_t step_ms) {
+    radar_driver_t *drv = radar_bha2_driver();
+    drv->close(drv->ctx);
+    drv->init(drv->ctx, &s_uart);
+    host_time_reset();
+    RadarSample s; memset(&s, 0, sizeof(s));
+    for (int i = 0; i < n; i++) {
+        host_time_set_ms((uint32_t)i * step_ms);  /* jump clock forward (pins) */
+        host_time_auto(1);                         /* resume +1ms/query        */
+        uint8_t buf[32];
+        uint8_t pf[12];
+        le_float(pf + 0, 1.0f);        /* total phase (unused) */
+        le_float(pf + 4, vals[i]);     /* breath phase         */
+        le_float(pf + 8, 2.0f);        /* heart phase (unused) */
+        size_t m = put_frame(buf, 0, (uint16_t)(i + 1), 0x0A13, pf, 12);
+        host_uart_load(buf, m);
+        drv->read_sample(drv->ctx, &s, 500);
+    }
+    return s;
+}
+
 /* ── tests ───────────────────────────────────────────────────────────────── */
 static void test_breath_and_heart(void **state) {
     (void)state;
@@ -116,12 +142,43 @@ static void test_bad_header_checksum_rejected(void **state) {
     assert_int_equal(s.q, 3);
 }
 
+/* Phase-based hold detection (ADR-0006): an oscillating breath phase yields a
+ * large peak-to-peak amplitude reported as valid. */
+static void test_phase_amplitude_breathing(void **state) {
+    (void)state;
+    const float vals[8] = {0.0f, 3.0f, 0.0f, 3.0f, 0.0f, 3.0f, 0.0f, 3.0f};
+    RadarSample s = drive_phase(vals, 8, 700);
+    assert_true(s.resp_motion_amp_valid);
+    assert_true(fabsf(s.resp_motion_amp - 3.0f) < 0.01f);   /* p2p = 3 */
+}
+
+/* A flat breath phase (no chest motion) yields ~0 amplitude — still valid; this
+ * is the signal the filter thresholds into a breath-hold. */
+static void test_phase_amplitude_flat(void **state) {
+    (void)state;
+    const float vals[8] = {5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, 5.0f};
+    RadarSample s = drive_phase(vals, 8, 700);
+    assert_true(s.resp_motion_amp_valid);
+    assert_true(s.resp_motion_amp < 0.01f);                 /* p2p ~ 0 */
+}
+
+/* Too few phase samples ⇒ amplitude not trusted (no false flat). */
+static void test_phase_amplitude_too_few_invalid(void **state) {
+    (void)state;
+    const float vals[3] = {0.0f, 3.0f, 0.0f};
+    RadarSample s = drive_phase(vals, 3, 700);
+    assert_false(s.resp_motion_amp_valid);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_breath_and_heart),
         cmocka_unit_test(test_distance_cm_to_mm),
         cmocka_unit_test(test_bad_data_checksum_rejected),
         cmocka_unit_test(test_bad_header_checksum_rejected),
+        cmocka_unit_test(test_phase_amplitude_breathing),
+        cmocka_unit_test(test_phase_amplitude_flat),
+        cmocka_unit_test(test_phase_amplitude_too_few_invalid),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
