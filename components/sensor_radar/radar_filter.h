@@ -131,11 +131,20 @@
  * the newest reading is ≤ RADAR_LIVE_FRESH_MS old, else q=2 (preliminary, for
  * the SBC per §9.6).  The supervisor's StableValueFilter path still exists —
  * it feeds ONLY the repeating robust estimate (stage 6). */
-#define RADAR_LIVE_WIN_MS              30000U /* ring span                     */
+#define RADAR_LIVE_WIN_MS              30000U /* ring span (gap survival)      */
 #define RADAR_LIVE_WIN_CAP             32     /* ≥ span / publish cadence      */
 #define RADAR_LIVE_MIN_SAMPLES         5      /* readings before showing       */
 #define RADAR_LIVE_FRESH_MS            10000U /* newest ≤ this → q=0           */
 #define RADAR_LIVE_STALE_MS            25000U /* newest > this → stop showing  */
+/* Two-tier median (2026-06-14): the displayed value is the median over the
+ * last RADAR_LIVE_FAST_MS of readings WHEN that recent window holds
+ * ≥ MIN_SAMPLES (so the tile tracks a real rate change — e.g. faster breathing
+ * — in ~FAST_MS, not ~WIN_MS).  HIL showed the radar reports rates up to ~30
+ * RPM correctly but the 30 s median lagged ~30 s behind.  During a burst gap
+ * the recent window empties and it falls back to the full WIN_MS ring median,
+ * preserving gap-survival/carry.  FAST_MS ≥ a couple breath cycles so the
+ * median still rejects the per-cycle phase noise. */
+#define RADAR_LIVE_FAST_MS             12000U /* responsive sub-window         */
 
 /* Phase-based breath-hold detection (ADR-0006).  The MR60BHA2's breath RATE is
  * a windowed frequency that cannot fall during a breath-hold; the raw breath

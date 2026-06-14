@@ -653,6 +653,33 @@ static void test_hold_cleared_on_absence(void **state)
     assert_false(out.resp_motion_valid);        /* not judged ⇒ null */
 }
 
+/* Two-tier median (2026-06-14): a sustained breathing-rate change is tracked
+ * within ~RADAR_LIVE_FAST_MS, far faster than the full RADAR_LIVE_WIN_MS ring
+ * (HIL: the radar reported rates up to ~30 RPM but the 30 s median lagged). */
+static void test_live_breath_tracks_rate_change_fast(void **state)
+{
+    (void)state;
+    RadarFilter f;
+    radar_filter_init(&f);
+    uint32_t t = 1000;
+
+    /* lock + steady 16 RPM */
+    RadarSample slow = mk(true, 600, 72.0f, 16.0f, 0);
+    RadarSample out = feed(&f, &slow, 20, &t);
+    assert_true(feq(out.breath_rpm, 16.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+
+    /* step to 28 RPM (in-gate): the recent window fills with 28s and the
+     * displayed value reaches it within ~RADAR_LIVE_FAST_MS, never dropping. */
+    RadarSample fast = mk(true, 600, 72.0f, 28.0f, 0);
+    int secs = (int)(RADAR_LIVE_FAST_MS / 1000u) + 2;   /* ~14 s */
+    for (int i = 0; i < secs; i++) {
+        radar_filter_apply(&f, &fast, t, &out);
+        assert_true(out.breath_rpm > 0.0f);             /* no dropout */
+        t += 1000u;
+    }
+    assert_true(feq(out.breath_rpm, 28.0f - RADAR_BREATH_CAL_OFFSET_RPM));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -676,6 +703,7 @@ int main(void)
         cmocka_unit_test(test_breath_hold_clears_on_resume),
         cmocka_unit_test(test_no_hold_when_amp_invalid),
         cmocka_unit_test(test_hold_cleared_on_absence),
+        cmocka_unit_test(test_live_breath_tracks_rate_change_fast),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

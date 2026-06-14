@@ -283,6 +283,26 @@ static float ring_median(const VitalRing *r)
     return rwe_median(tmp, n);                     /* sorts tmp in place */
 }
 
+/* Displayed median (two-tier): prefer the last RADAR_LIVE_FAST_MS of readings
+ * so the value tracks a real rate change quickly; if that recent window holds
+ * fewer than RADAR_LIVE_MIN_SAMPLES (a burst gap), fall back to the full-ring
+ * median so the last value is carried, not blanked. */
+static float ring_live_median(const VitalRing *r, uint32_t now)
+{
+    float tmp[RADAR_LIVE_WIN_CAP];
+    int   n = 0;
+    for (int i = 0; i < r->count; i++) {
+        unsigned idx = (r->head + (unsigned)i) % RADAR_LIVE_WIN_CAP;
+        if ((uint32_t)(now - r->ts[idx]) <= RADAR_LIVE_FAST_MS) {
+            tmp[n++] = r->val[idx];
+        }
+    }
+    if (n >= RADAR_LIVE_MIN_SAMPLES) {
+        return rwe_median(tmp, n);                 /* responsive recent median */
+    }
+    return ring_median(r);                         /* gap fallback: carry */
+}
+
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
 void radar_filter_init(RadarFilter *f)
@@ -426,7 +446,7 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
         ring_newest_within(&f->breath_live, now_ms, RADAR_LIVE_STALE_MS);
 
     if (heart_live_ok) {
-        float hr = ring_median(&f->heart_live) - RADAR_HEART_CAL_OFFSET_BPM;
+        float hr = ring_live_median(&f->heart_live, now_ms) - RADAR_HEART_CAL_OFFSET_BPM;
         out->heart_bpm = (hr > 0.0f) ? hr : 0.0f;
     } else {
         out->heart_bpm = 0.0f;
@@ -437,7 +457,7 @@ void radar_filter_apply(RadarFilter *f, const RadarSample *raw,
      * counted as a fresh/stale published vital. */
     bool breath_published = breath_live_ok && !f->hold_active;
     if (breath_published) {
-        float br = ring_median(&f->breath_live) - RADAR_BREATH_CAL_OFFSET_RPM;
+        float br = ring_live_median(&f->breath_live, now_ms) - RADAR_BREATH_CAL_OFFSET_RPM;
         out->breath_rpm = (br > 0.0f) ? br : 0.0f;
     } else {
         out->breath_rpm = 0.0f;
