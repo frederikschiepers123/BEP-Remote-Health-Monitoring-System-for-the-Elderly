@@ -46,6 +46,14 @@ const AIR_QUALITY_STATUS = {
   "Unhealthy": "red",
 };
 
+// Suspected-hyperventilation banner: at/above this breath rate the breath tile
+// shows "Hyperventilation?" (red) instead of the plain unit. This is tachypnea,
+// NOT a confirmed diagnosis — the "?" is deliberate, pending clinical sign-off
+// (CLAUDE.md §9.5). >24 RPM is already the red band (THRESHOLDS.respiratoryRate),
+// and the firmware caps the sensor at ~30, so this fires for sustained fast
+// breathing in the high-20s. Sibling of the "No breathing" hold banner.
+const RESP_HYPERVENT_RPM = 25;
+
 Module.register("MMM-SensorUI", {
   defaults: {},
 
@@ -158,10 +166,17 @@ Module.register("MMM-SensorUI", {
       );
 
       // Breath tile precedence: a confirmed hold overrides the rate (which the
-      // firmware nulls during a hold), then a live rate, then "Measuring...".
+      // firmware nulls during a hold); then a sustained high rate flags
+      // suspected hyperventilation (keeps the number, swaps the caption + red);
+      // then a normal live rate; then "Measuring...".
+      const breathNum = Number(this.respiratoryRate);
       let breathCard;
       if (breathHold) {
         breathCard = createStatusCard("fa-lungs", "No breathing", "", "red", true);
+      } else if (breathReady && Number.isFinite(breathNum) &&
+                 breathNum >= RESP_HYPERVENT_RPM) {
+        breathCard = createStatusCard("fa-lungs", this.respiratoryRate,
+                                      "Hyperventilation?", "red");
       } else if (breathReady) {
         breathCard = createStatusCard("fa-lungs", this.respiratoryRate,
                                       "breaths<br>per min", this.respiratoryRateTL);
