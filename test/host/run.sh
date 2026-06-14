@@ -56,6 +56,7 @@ build_run test_aht21      test_aht21.c      "$REPO/components/sensor_env/aht21.c
 build_run test_bh1750     test_bh1750.c     "$REPO/components/sensor_light/bh1750.c"
 build_run test_ens160     test_ens160.c     "$REPO/components/sensor_air/ens160.c"
 build_run test_radar_bha2 test_radar_bha2.c "$REPO/components/sensor_radar/radar_bha2.c"
+build_run test_radar_hmmd test_radar_hmmd.c "$REPO/components/sensor_radar/radar_hmmd.c"
 build_run test_radar_filter test_radar_filter.c "$REPO/components/sensor_radar/radar_filter.c"
 build_run test_spool      test_spool.c      "$REPO/components/spool/spool.c"
 

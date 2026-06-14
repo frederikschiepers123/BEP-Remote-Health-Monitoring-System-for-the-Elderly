@@ -1,21 +1,17 @@
 # MQTT Topic and Payload Schema
 
-> ⚠️ **STALE — parts of this file predate current decisions.** The authoritative
-> contract is **CLAUDE.md §9.1/§9.2 (topics + JSON payloads), §9.6 (FHIR), and
-> the ADRs.** Specifically, this file still says payloads are CBOR and lists IR
-> camera topics — both are wrong now: **the wire format is JSON** (RFC 8259, see
-> CLAUDE.md §9.2; CBOR was reversed) and **there is no IR camera** (dropped, §17).
-> Commands are JSON, not CBOR maps. A full rewrite of this file is tracked
-> separately; until then defer to CLAUDE.md. New since ADR-0003: `time/set` is
-> subscribed and all uplink topics are delivered with at-least-once retry from
-> the flash spool (may be delayed / re-sent after an outage — consumers dedup on
-> `seq`).
+**Reference for the topics published or subscribed to by the sensor-module
+firmware.** The authoritative contract is root `CLAUDE.md §9.1` (topics) and
+`§9.2` (JSON payloads); `§9.6` covers the firmware→SBC FHIR mapping. This file
+mirrors those sections for quick reference — if it ever drifts, the root file
+wins.
 
-**Reference for topics published or subscribed to by the sensor-module firmware.**
-
-All topics are rooted at `rmms/<uuid>/...` where `<uuid>` is the device UUID from the factory-provisioned identity (36-character UUIDv4 string).
-
-Payloads are **JSON** (RFC 8259) per CLAUDE.md §9.2.  (This file's per-topic CBOR examples below are outdated; the field names and semantics still hold, only the encoding changed.)
+All topics are rooted at `rmms/<uuid>/...` where `<uuid>` is the factory-provisioned
+device UUID (36-character UUIDv4 string). **Payloads are JSON** (RFC 8259, UTF-8,
+compact). CBOR was considered and rejected (root `CLAUDE.md §9.2`). All uplink
+sensor topics are delivered at-least-once with QoS-1 retry from the device's
+non-volatile flash spool ([ADR-0003](adr/0003-nv-flash-spool-and-time-sync.md)),
+so a message may be delayed or re-sent after an outage — consumers dedup on `seq`.
 
 ---
 
@@ -23,42 +19,63 @@ Payloads are **JSON** (RFC 8259) per CLAUDE.md §9.2.  (This file's per-topic CB
 
 | Topic | Direction | QoS | Retained | Notes |
 |---|---|---|---|---|
-| `rmms/<uuid>/env` | publish | 1 | no | BME280 environment sample |
+| `rmms/<uuid>/env` | publish | 1 | no | Environment sample (BME280 or AHT21) |
+| `rmms/<uuid>/air` | publish | 1 | no | Air-quality sample (ENS160) |
 | `rmms/<uuid>/radar` | publish | 1 | no | Radar sample (raw + quality flag) |
-| `rmms/<uuid>/light` | publish | 1 | no | LDR light sample |
-| `rmms/<uuid>/ir/meta` | publish | 1 | no | IR frame metadata |
-| `rmms/<uuid>/ir/frame` | publish | 1 | no | Binary IR frame payload |
+| `rmms/<uuid>/light` | publish | 1 | no | Light sample (BH1750 or GL5516) |
 | `rmms/<uuid>/status` | publish | 1 | **yes** | `"online"` / `"offline"` (LWT) |
-| `rmms/<uuid>/cmd` | subscribe | 1 | — | Commands from Radxa (see below) |
-| `rmms/<uuid>/time/set` | subscribe | 1 | — | Tablet wall-clock sync `{"epoch_ms":…}` (§9.2.5; ADR-0003) |
+| `rmms/<uuid>/cmd` | subscribe | 1 | — | Commands (see below) |
+| `rmms/<uuid>/time/set` | subscribe | 1 | — | Wall-clock sync `{"epoch_ms":…}` (§9.2.5; ADR-0003) |
 | `rmms/<uuid>/log` | publish | 0 | no | Critical log lines (text, best-effort) |
 
-> Note: the IR topics (`ir/meta`, `ir/frame`) above are obsolete — no IR camera exists in v1 (CLAUDE.md §17). All `publish` sensor topics are delivered with at-least-once QoS-1 retry from the non-volatile spool (ADR-0003).
+**Downlink topics** in the per-device tree that the firmware **never** publishes
+or subscribes to (operator → mirror; documented here for completeness, root
+`CLAUDE.md §9.1`):
+
+| Topic | Publisher | Subscriber | Payload |
+|---|---|---|---|
+| `rmms/<uuid>/info` | operator cert (PoC laptop; prod Radxa relay) | mirror | `{"text":"...","wall_ms":…}` |
+| `rmms/<uuid>/screen` | operator cert | mirror | `{"page":1..4,"wall_ms":…}` |
+
+> There is **no IR camera** (dropped, root `CLAUDE.md §17`) and **no
+> `rmms/ui/...` namespace** (retired — the mirror reads the raw topics directly,
+> root `CLAUDE.md §9.5`). If you find either referenced anywhere, it's stale.
 
 ---
 
 ## Payload envelope (all sensor topics)
 
-Every sensor sample payload (env, radar, light, ir/meta) uses the same outer wrapper:
+Every sensor sample uses the same outer wrapper (root `CLAUDE.md §9.2.1`):
 
-```
+```json
 {
-  "ts_us":   uint64,    # monotonic microseconds since boot (always present)
-  "wall_ms": uint64,    # wall-clock milliseconds (optional; 0 or absent if RTC not synced)
-  "seq":     uint32,    # per-topic monotonic sequence counter (starts at 0, wraps at 2^32)
-  "v":       <body>,    # sensor-specific inner object — see sections below
-  "q":       uint8      # quality flag: 0=ok  1=stale  2=degraded  3=invalid
+  "ts_us":   1234567890,
+  "wall_ms": 1716210000000,
+  "seq":     42,
+  "q":       0,
+  "v":       { }
 }
 ```
 
-Quality flag semantics:
-
-| `q` | Meaning | Action for consumers |
+| Field | Type | Meaning |
 |---|---|---|
-| 0 | OK — fresh, plausible reading | Use normally |
-| 1 | Stale — measurement triggered but driver returned cached value | Use with caution |
-| 2 | Degraded — ghost reading or sensor in reduced-quality state | Use with caution; apply additional filtering |
-| 3 | Invalid — hardware error or driver not yet ready | Discard; do not display or forward to FHIR |
+| `ts_us` | uint64 | Monotonic microseconds since boot. Always present, always valid. |
+| `wall_ms` | int64 | Wall-clock ms since the Unix epoch. **`-1` sentinel** until the first `time/set`. **Never omitted** — use the sentinel, do not drop the field. |
+| `seq` | uint32 | Per-topic monotonic counter, persisted across reboots (monotonic-with-gaps). Used by the SBC for dedup. |
+| `q` | uint8 | Quality flag (below). |
+| `v` | object | Sensor-specific body — see per-sensor sections. |
+
+Quality flag (`q`):
+
+| `q` | Meaning | Consumer action |
+|---|---|---|
+| 0 | OK — fresh, plausible | Use normally |
+| 1 | Stale — cached value returned | Use with caution |
+| 2 | Degraded / validating — ghost reading, warm-up, or carried on older window data | Use with caution; FHIR `preliminary` |
+| 3 | Invalid — hardware error or driver not ready | Discard; do not display or forward to FHIR |
+
+The firmware never silently drops a sample; it sets `q` instead (root
+`CLAUDE.md §9.2.1`, audit anti-pattern §19.1).
 
 ---
 
@@ -66,75 +83,66 @@ Quality flag semantics:
 
 Inner `v` object:
 
-```
-{
-  "temp_c":        float32,   # temperature in degrees Celsius
-  "humidity_pct":  float32,   # relative humidity 0.0–100.0 %
-  "pressure_hpa":  float32    # atmospheric pressure in hPa (= mbar)
-}
+```json
+{"temp_c": 21.500, "hum_pct": 55.000, "pres_hpa": 1013.250}
 ```
 
-Example (CBOR diagnostic notation):
+- `temp_c` — temperature in °C (`%.3f`).
+- `hum_pct` — relative humidity 0–100 % (`%.3f`).
+- `pres_hpa` — atmospheric pressure in hPa, **or `null`** when the AHT21 driver
+  is active (it has no pressure sensor). BME280 always emits a number. Receivers
+  must not assume `pres_hpa` is numeric (root `CLAUDE.md §9.2.2`/§9.2.3).
+
+---
+
+## `rmms/<uuid>/air` — air-quality sample (ENS160)
+
+Inner `v` object:
+
+```json
+{"co2_ppm": 600, "tvoc_ppb": 300, "aqi": 2}
 ```
-{
-  "ts_us":       1234567890,
-  "wall_ms":     0,
-  "seq":         42,
-  "v": {
-    "temp_c":      21.45,
-    "humidity_pct": 58.3,
-    "pressure_hpa": 1013.25
-  },
-  "q": 0
-}
-```
+
+- `co2_ppm` — equivalent CO₂ estimate, integer ppm.
+- `tvoc_ppb` — total VOC estimate, integer ppb.
+- `aqi` — UBA air-quality index, integer 1–5 (1 excellent … 5 unhealthy).
+
+The ENS160 needs an undocumented warm-up (~5–10 min) after power-up; samples
+during that window carry `q=2`. The env driver's last temp/hum is written to the
+ENS160 TEMP_IN/RH_IN compensation registers every cycle.
 
 ---
 
 ## `rmms/<uuid>/radar` — radar sample
 
-Published by both the Seeed MR60BHA2 and DFRobot C1001 drivers via the common `radar_driver_t` interface.  The inner object is identical regardless of which radar is attached.
+Produced by either radar driver — the Seeed MR60BHA2 (60 GHz, `"radar":"bha2"`)
+or the Seeed 24 GHz HMMD module (`"radar":"hmmd"`, ADR-0007) — via the common
+`radar_driver_t` interface, so the inner object is radar-independent (root
+`CLAUDE.md §3.2`/§7.4). Fields a given radar does not report are sent as the
+documented sentinel / `null` (the HMMD module has no breath-phase stream, so its
+`resp_motion` is always `null`, and it often reports no `heart_bpm`).
 
 Inner `v` object:
 
-```
-{
-  "presence":    bool,      # true if a person is detected
-  "distance_mm": uint32,   # distance to closest target in mm; 0 = not reported by this radar
-  "breath_bpm":  float32,  # breathing rate in breaths per minute; null = not reported / suppressed during a hold
-  "heart_bpm":   float32,  # heart rate in beats per minute; null = not reported
-  "resp_motion": bool|null # ADR-0006: chest motion present; false = possible breath-hold; null = undetermined
-}
+```json
+{"presence": true, "distance_mm": 2400, "breath_bpm": 16.5, "heart_bpm": 72.0, "resp_motion": true}
 ```
 
-`resp_motion` (ADR-0006) is phase-based breath-hold detection. The breath
-*rate* is a windowed frequency that cannot fall during a hold, so the firmware
-detects "no respiratory motion" from the radar's raw breath-phase amplitude and
-reports it here: `true` = chest motion seen, `false` = possible breath-hold
-(and `breath_bpm` is nulled for that sample), `null` = could not judge (no
-presence/distance lock, or no valid phase amplitude). It is a suspected
-indicator, not a clinical apnea alarm. Radxa/FHIR mapping is TBD (see §9.6).
+- `presence` — bool, always present.
+- `distance_mm` — distance to closest target in mm; `null`/`0` if not reported.
+- `breath_bpm` — breathing rate; `null` if not reported this cycle **or
+  suppressed during a breath-hold**.
+- `heart_bpm` — heart rate; `null` if not reported this cycle.
+- `resp_motion` — ADR-0006 phase-based breath-hold detection: `true` = chest
+  motion present, `false` = no respiratory motion (possible hold; `breath_bpm`
+  is nulled for that sample), `null` = undetermined (no presence/distance lock or
+  no valid breath-phase amplitude). Always present. A suspected indicator, not a
+  clinical apnea alarm; FHIR mapping TBD (root `CLAUDE.md §9.6`).
 
-Quality flag notes:
-- `q=2` (degraded): presence is asserted but vital signs are implausibly low (ghost-detection heuristic).  Radxa should apply additional filtering before clinical use.
-- `q=3` (invalid): UART error or driver not yet initialised.
-
-Example:
-```
-{
-  "ts_us":  9876543210,
-  "wall_ms": 0,
-  "seq":    100,
-  "v": {
-    "presence":    true,
-    "distance_mm": 1200,
-    "breath_bpm":  15.0,
-    "heart_bpm":   72.0,
-    "resp_motion": true
-  },
-  "q": 0
-}
-```
+Quality notes: `q=2` when presence is asserted but vitals are implausible
+(ghost-detection) or values are carried on older window data; `q=3` on UART
+error / driver not ready. (The plausibility/median filtering is
+[ADR-0005](adr/0005-mcu-side-radar-filtering.md).)
 
 ---
 
@@ -142,98 +150,74 @@ Example:
 
 Inner `v` object:
 
-```
-{
-  "lux": float32    # approximate illuminance in lux (GL5516 LDR, 10 kΩ divider)
-}
+```json
+{"lux": 120.5}
 ```
 
-Example:
-```
-{
-  "ts_us":  111222333,
-  "wall_ms": 0,
-  "seq":    7,
-  "v": {
-    "lux": 150.4
-  },
-  "q": 0
-}
-```
-
----
-
-## `rmms/<uuid>/ir/meta` — IR frame metadata
-
-**Note:** IR camera part is not yet confirmed (CLAUDE.md §16 Q1).  The stub driver publishes `q=3` until the part is resolved.
-
-Inner `v` object:
-
-```
-{
-  "width":  uint16,   # frame width in pixels
-  "height": uint16    # frame height in pixels
-}
-```
-
-Example (when operational):
-```
-{
-  "ts_us":  555666777,
-  "wall_ms": 0,
-  "seq":    3,
-  "v": {
-    "width":  32,
-    "height": 24
-  },
-  "q": 0
-}
-```
-
----
-
-## `rmms/<uuid>/ir/frame` — binary IR frame
-
-Raw pixel data with no CBOR envelope.  Format depends on the IR camera part (TBD per CLAUDE.md §16 Q1).  QoS 1, not retained.
+Same payload for both light variants (root `CLAUDE.md §3.2`, ADR-0001): BH1750
+(I²C, calibrated lux directly — the default) or GL5516 LDR (ADC0 + 1 kΩ divider,
+per-board power-law calibration).
 
 ---
 
 ## `rmms/<uuid>/status` — device status (retained)
 
-Plain UTF-8 string, not CBOR.  Two values only:
+Plain UTF-8 string (not a JSON object). Two values only:
 
-| Value | When published |
+| Value | When |
 |---|---|
-| `"online"` | Immediately after a successful MQTT CONNECT/CONNACK |
-| `"offline"` | LWT — published by the broker if the connection is lost |
+| `"online"` | published retained on each MQTT CONNACK |
+| `"offline"` | the broker publishes this LWT if the connection drops |
 
-Retained so a subscriber that connects later immediately sees the current state.
+Retained, so a late subscriber immediately sees the current state.
 
 ---
 
 ## `rmms/<uuid>/cmd` — command (subscribed)
 
-The firmware subscribes to this topic and processes the following closed set of commands.  All commands are CBOR maps with at least a `"cmd"` key.
+The firmware subscribes and processes this **closed** set. Payloads are JSON
+objects with a `"cmd"` key (parsed by the jsmn tokenizer, root `CLAUDE.md §9.2`):
 
-| Command | CBOR payload | Action |
+| Command | Payload | Action |
 |---|---|---|
-| `activate` | `{"cmd": "activate"}` | Start publishing sensor data |
-| `deactivate` | `{"cmd": "deactivate"}` | Stop publishing, keep connection alive |
-| `deregister` | `{"cmd": "deregister"}` | Clear all `/cfg/` littlefs config (not certs), factory reset to unconfigured state |
-| `shutdown` | `{"cmd": "shutdown"}` | Drop links and idle; recover on power cycle |
+| `activate` | `{"cmd":"activate"}` | Start publishing sensor data |
+| `deactivate` | `{"cmd":"deactivate"}` | Stop publishing, keep the connection |
+| `deregister` | `{"cmd":"deregister"}` | Clear all `/cfg/` config (not certs); factory reset to unconfigured |
+| `shutdown` | `{"cmd":"shutdown"}` | Drop links and idle; recover on power cycle |
 
-Adding new commands requires updating the Radxa team's contract first (CLAUDE.md §9.3).
+Adding commands requires the Radxa team's sign-off first (root `CLAUDE.md §9.3`).
+`deregister_sbc` from the previous group is removed and must not return.
+
+---
+
+## `rmms/<uuid>/time/set` — wall-clock sync (subscribed)
+
+```json
+{"epoch_ms": 1716210000000}
+```
+
+Published per-device by the broker LAN's time-sync publisher (the SBC aggregator
+in the live stack) when a device connects. The firmware maintains a wall-clock
+offset and stamps each spooled record's `wall_ms` (§9.2.5, ADR-0003). No
+NTP-from-WAN.
 
 ---
 
 ## `rmms/<uuid>/log` — log line
 
-Plain UTF-8 text, not CBOR.  Best-effort (QoS 0), not retained.  One log line per publish.  Published only for critical errors (LOG_E level).
+Plain UTF-8 text (not a JSON object). Best-effort QoS 0, not retained. One line
+per publish, only for critical errors (`LOG_E`).
 
 ---
 
 ## Namespace rules
 
-- The firmware **never publishes to `rmms/ui/...`**.  That namespace is owned by the Radxa Dragon Q6A (CLAUDE.md §9.5).
-- The firmware **never publishes raw numeric vitals in a format intended for direct human display**.
+- The firmware publishes **only** the topics listed as `publish` above
+  (`env`, `air`, `radar`, `light`, `status`, `log`). It publishes raw numeric
+  vitals — that *is* the contract; the mirror does its own thresholding in
+  `MMM-SensorUI.js` (root `CLAUDE.md §9.5`).
+- The firmware subscribes **only** to `rmms/<uuid>/cmd` and
+  `rmms/<uuid>/time/set`.
+- The firmware **never** publishes or subscribes to `info` / `screen` (operator →
+  mirror downlink) and there is **no `rmms/ui/...` namespace**.
 - No spaces, no Dutch diacritics, no PII in topic strings.

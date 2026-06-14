@@ -20,7 +20,7 @@
 #   pkg install nodejs git termux-api
 #   git clone <your tree>/MagicMirror ~/MagicMirror
 #   cd ~/MagicMirror && npm run install-mm
-#   cd ~/MagicMirror/modules/MMM-MQTT && npm install
+#   cd ~/MagicMirror/modules/MMM-CustomMQTTBridge && npm install   # mTLS MQTT bridge (not MMM-MQTT)
 #   mkdir -p ~/MagicMirror/certs
 #   # ... copy mirror bundle: ca.crt / cert.pem / key.pem ...
 #   sed -i "s/REPLACE_WITH_MIRROR_CN/<actual mirror CN>/" ~/MagicMirror/config/config.js

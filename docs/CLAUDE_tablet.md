@@ -1,500 +1,361 @@
-# CLAUDE.md — RMMS Tablet
+# CLAUDE.md — RMMS Tablet tier
 
-> Read this file completely before writing or modifying any code in this repository.
-> It is the single source of truth for the tablet-side stack: MQTT broker,
-> USB-MQTT bridge, MagicMirror², and Android autostart glue.
+> Read this file completely before working on the tablet-side stack.
+> The firmware's `CLAUDE.md` (repo root) is the single source of truth for the
+> whole system; **if anything here contradicts it, the root file wins.** This
+> file documents the tablet tier specifically: the MQTT broker, MagicMirror²,
+> mDNS, the presence→screen bridge, and Android autostart glue.
+>
+> **Scope note:** the tablet artifacts currently live **in this monorepo**
+> (`scripts/tablet_*.sh`, `MagicMirror/`, `out/broker/`) as a temporary
+> convenience; factor them into a separate tablet repo before v1 (root
+> `CLAUDE.md §1`). The firmware build never compiles any of this.
 
 ---
 
 ## 1. Project context
 
-This repository contains the **tablet-side software** for the Remote Medical
-Monitoring System (RMMS) — a TU Delft BSc Applied Project (BAP). It runs on
-an **Android tablet** mounted behind a two-way acrylic mirror, serving two
-simultaneous roles:
+The Android tablet sits behind the two-way acrylic mirror and plays **two
+roles simultaneously**:
 
-1. **MQTT broker** (Mosquitto under Termux) — the central message bus for
-   the sensor module, the Radxa aggregator, and the mirror UI.
-2. **Smart mirror client** (MagicMirror² in a Chrome kiosk) — the ambient
-   display for the resident.
+1. **MQTT broker** — Mosquitto under Termux, mTLS on `:8883`. The central
+   message bus for the sensor module(s), the SBC aggregator, the mirror, and
+   the operator.
+2. **MagicMirror² client** — the smart-mirror UI for the resident. It
+   subscribes **directly to the firmware's raw `rmms/<uuid>/...` topics on its
+   own broker** and renders per-sensor tiles.
 
 The tablet is the hub of a three-tier system:
 
 ```
-Sensor Module ──► Tablet ──────────────► Radxa Dragon Q6A ──► Hospital FHIR
-   (firmware     (THIS REPO)              (Radxa repo)          (external)
-   repo)
+Sensor Module ──► Tablet ───────────────► Radxa / SBC ──► Hospital FHIR
+  (firmware       (broker + mirror)        (sbc/)          (external)
+   repo root)     (THIS tier)
 ```
 
-This repo contains **everything that runs on the tablet** and nothing else.
+The previous BAP group put the broker on their SBC; the tablet-as-broker model
+fixes several reliability issues at the cost of Android lifecycle complexity
+(Doze, Termux quirks). This tier manages that complexity.
 
-The previous BAP group did not have an equivalent — they put the broker on
-their SBC, which was the wrong architectural call (see firmware repo
-`CLAUDE.md §1` and the technical audit). The tablet-as-broker model
-sidesteps several reliability issues at the cost of operational complexity
-(Android lifecycle, Termux quirks). This repo manages that complexity.
+> **What changed vs. earlier drafts of this file (now corrected):**
+> - **There is no USB-MQTT bridge.** USB-CDC was dropped from v1 and the whole
+>   `socat` byte-pipe / `bridge/` idea is gone — Wi-Fi is the sole transport
+>   ([ADR-0002](adr/0002-wifi-sole-transport.md)). The firmware reaches the
+>   broker over Wi-Fi mTLS only.
+> - **The wire format is JSON** (RFC 8259, root `CLAUDE.md §9.2`), not CBOR.
+> - **There is no `rmms/ui/...` namespace and no `MMM-RMMS` module.** The mirror
+>   consumes the **raw** topics via `MMM-CustomMQTTBridge` → `MMM-SensorUI`
+>   (root `CLAUDE.md §9.5`).
+> - **The mirror shows numbers.** Per-tile numeric value + severity colour is
+>   the design (root `CLAUDE.md §9.5`); the old "no raw numbers" rule is wrong.
 
 ---
 
 ## 2. Components
 
-The tablet runs four things, in roughly this dependency order:
+The tablet runs these, roughly in dependency order:
 
-| Component | What it is | Owner |
+| Component | What it is | Where it lives |
 |---|---|---|
-| Mosquitto | MQTT broker, mTLS on `:8883` | `mosquitto/` directory |
-| USB-MQTT bridge | Transparent byte pipe from `/dev/ttyACM0` to `localhost:8883` | `bridge/` directory |
-| MagicMirror² | Smart mirror UI, runs in Chrome kiosk | `magicmirror/` directory |
-| Termux:Boot scripts | Glue that brings 1–3 up at device boot | `autostart/` directory |
+| Mosquitto | MQTT broker, mTLS `:8883` (+ loopback `:1883` for app IPC) | config: `out/broker/{mosquitto.conf,acl}` → tablet `~/rmms/` |
+| MagicMirror² | Smart-mirror UI (`npm run server`, Chrome viewer) | `MagicMirror/` (custom modules under `MagicMirror/modules/`) |
+| mDNS responder | Advertises `tablet.local` so devices find the broker by name | `scripts/tablet_mdns_responder.py` |
+| Presence→screen bridge | Wakes/sleeps the display from radar presence | `scripts/tablet_presence_screen.py` |
+| Termux:Boot autostart | Brings everything up at device boot | `scripts/tablet_boot.sh` → `~/.termux/boot/10-rmms` |
 
-Each component has its own subdirectory with its own configs, scripts, and
-README. This CLAUDE.md ties them together.
+`scripts/tablet_start_magicmirror.sh` launches and supervises MagicMirror².
+There is **no bridge process** — that line item from earlier drafts is deleted.
 
 ---
 
 ## 3. Mosquitto broker
 
-### 3.1 Why Mosquitto and not something else
+### 3.1 Why Mosquitto
 
-Mosquitto is in Termux's package repository (`pkg install mosquitto`) and is
-the same Mosquitto used everywhere else in this system (workstation dev
-broker, integration tests). One implementation, one config syntax, one set
-of bugs to know about. Do not substitute mosca, NanoMQ, EMQX, or anything
-else.
+It is in Termux's package repo (`pkg install mosquitto`) and is the same broker
+used on the dev workstation and in CI. One implementation, one config syntax.
+Do not substitute mosca, NanoMQ, or EMQX.
 
-### 3.2 Configuration
+### 3.2 Configuration (live: `out/broker/mosquitto.conf`)
 
-`mosquitto/mosquitto.conf` (deployed to Termux's `$PREFIX/etc/mosquitto/`):
+Two listeners, generated by `scripts/provision_ca.sh` and deployed to the
+tablet's `~/rmms/`:
 
 ```
-listener 8883
+per_listener_settings true
+
+# ── Network listener — the firmware's broker contract ───────────────────────
+# Mutual TLS, cert CN as username, ACL-enforced. The ONLY network-facing
+# listener. Firmware, mirror, operator, SBC, and the presence bridge's READ side.
+listener 8883 0.0.0.0
 protocol mqtt
-
-cafile      /data/data/com.termux/files/home/rmms/certs/ca.der
-certfile    /data/data/com.termux/files/home/rmms/certs/tablet.crt
-keyfile     /data/data/com.termux/files/home/rmms/certs/tablet.key
-require_certificate true
-tls_version tlsv1.2
-
-use_identity_as_username true
 allow_anonymous false
+require_certificate true
+use_identity_as_username true
+cafile   /data/data/com.termux/files/home/rmms/certs/ca.crt
+certfile /data/data/com.termux/files/home/rmms/certs/broker.crt
+keyfile  /data/data/com.termux/files/home/rmms/certs/broker.key
+acl_file /data/data/com.termux/files/home/rmms/acl
 
-acl_file    /data/data/com.termux/files/home/rmms/mosquitto/acl
+# ── Localhost-only plain listener — on-device app IPC ONLY (ADR-0004) ────────
+# Bound to 127.0.0.1, so NOT network-reachable: no firmware traffic touches it.
+# Carries the HealthMonitorWakeTest `display` topic + the presence bridge's
+# WRITE side (see presence_screen_coupling.md). A *network*-facing plain
+# listener would violate the mTLS contract; this loopback one does not.
+listener 1883 127.0.0.1
+protocol mqtt
+allow_anonymous true
 
-persistence true
-persistence_location /data/data/com.termux/files/home/rmms/mosquitto/data/
-queue_qos0_messages false
-max_queued_messages 10000
-
-log_dest file /data/data/com.termux/files/home/rmms/mosquitto/log/mosquitto.log
-log_type notice
-log_type warning
-log_type error
+persistence false
+log_dest stdout
 ```
 
-### 3.3 ACL
+Notes:
+- Certs are PEM (`ca.crt` / `broker.crt` / `broker.key`), not DER. (The Pico's
+  own copies are DER — that is a device-side detail, see root `CLAUDE.md §10.2`.)
+- `tls_version` is left at the Mosquitto default (TLS 1.2+); the device pins the
+  cipher suites (root `CLAUDE.md §10.2`).
+- The `:1883` loopback listener is the **only** plaintext path in the system and
+  is unreachable from the network ([ADR-0004](adr/0004-localhost-plain-listener-app-ipc.md)).
 
-The ACL is **pattern-based, not per-device**. Adding new devices does not
-require touching the broker config:
+### 3.3 ACL (live: `out/broker/acl`)
+
+Pattern-based and CN-keyed — **adding a device needs zero broker config**.
+`use_identity_as_username true` makes `%u` resolve to the client cert's CN.
 
 ```
-# mosquitto/acl
+# ─── Per-device pattern (CN = UUID) ─────────────────────────────────────────
+pattern write rmms/%u/#
+pattern read  rmms/%u/cmd
 
-# Each device can write only under its own UUID prefix and read its own command topic
-pattern write rmms/%c/#
-pattern read  rmms/%c/cmd
-pattern read  rmms/%c/time/set
+# ─── Mirror role (read-only across the whole device tree) ───────────────────
+user mirror-<id>
+topic read rmms/#
 
-# The Radxa aggregator has a known CN; full read of raw vitals + publish to UI topics
-user radxa-aggregator
-topic read rmms/+/env
-topic read rmms/+/radar
-topic read rmms/+/light
-topic read rmms/+/status
-topic write rmms/ui/+/#
+# ─── Operator role (downlink info/screen only) ─────────────────────────────
+user operator-<id>
+topic write rmms/+/info
+topic write rmms/+/screen
 
-# MagicMirror² is a read-only subscriber of UI topics
-user magicmirror-client
-topic read rmms/ui/+/#
+# ─── SBC / Radxa role (appended by deploy_home_kit.sh) ──────────────────────
+#   reads raw vitals, publishes per-device time-sync
+user radxa-<home>
+topic read  rmms/+/env
+topic read  rmms/+/air
+topic read  rmms/+/radar
+topic read  rmms/+/light
+topic read  rmms/+/status
+topic write rmms/+/time/set
 ```
 
-The `%c` substitution = "the CN from the client's certificate." This is why
-`use_identity_as_username true` matters. **Adding a new sensor module is
-zero broker-side configuration** — the device's cert CN dictates its
-permissions automatically.
+The base file (device pattern + mirror + operator) is written by
+`provision_ca.sh`; the `radxa-<home>` block is appended idempotently by
+`deploy_home_kit.sh`. `scripts/test_broker_acl.sh <broker-ip>` proves the
+enforcement (7/7: own-subtree write OK, cross-device write denied, operator
+info/screen OK, operator env denied, device cmd read OK, cross-read denied,
+anonymous refused).
 
-### 3.4 Persistence and storage
+### 3.4 Persistence
 
-Mosquitto persists retained messages and queued QoS 1 messages to
-`persistence_location` between restarts. On Termux this lives in the
-app-private storage area, which survives Termux restarts but not app
-uninstalls.
-
-**Do not put the persistence file on the Android shared storage** (`/sdcard`
-or `/storage/emulated/0/`). Those are scoped storage with limited fsync
-guarantees and are not safe for a database-shaped file.
+The live config sets `persistence false` — the broker is a relay, and
+loss-tolerance is owned end-to-end by the device's flash spool (ADR-0003) plus
+the SBC's ≥24 h SQLite queue. If you ever enable persistence, keep the file in
+Termux app-private storage (`~/...`), **never** on `/sdcard` (scoped storage,
+unsafe fsync).
 
 ---
 
-## 4. USB-MQTT bridge
+## 4. MagicMirror²
 
-### 4.1 What it is
+### 4.1 Run mode (resolved — root `CLAUDE.md §16 Q4`)
 
-A **transparent byte pipe** between `/dev/ttyACM0` (the firmware's USB-CDC
-serial endpoint) and `localhost:8883` (Mosquitto's mTLS listener). It does
-**not** parse MQTT, does **not** terminate TLS, does **not** look at the
-bytes. It is `socat` with a service wrapper.
+Termux + Node.js running `npm run server` (server-only, no Electron) on `:8080`;
+Chrome on the tablet opens `http://localhost:8080`. `scripts/tablet_start_magicmirror.sh`
+launches it and restarts on death with backoff. A production kiosk lock (Fully
+Kiosk Browser) is optional and not needed for the v1 PoC.
 
-```
-Firmware                                      Bridge                                Mosquitto
-  │ mTLS  ────► /dev/ttyACMx ────► [byte pipe] ────► localhost:8883 ────► mTLS terminates here
-  │                                                                           │
-  └─── identical TLS session as the Wi-Fi path ───────────────────────────────┘
-```
+### 4.2 The two custom modules
 
-The bridge being a dumb pipe is **the entire point**. It is what allows the
-firmware to use one TLS code path (firmware §8) and Mosquitto to enforce one
-ACL model (§3.3 above) regardless of which physical path the device is on.
+The mirror consumes the firmware's **raw** topics. Two modules
+(`MagicMirror/modules/`):
 
-### 4.2 Implementation
+- **`MMM-CustomMQTTBridge`** — does mTLS to the broker with the **mirror cert**,
+  subscribes to `rmms/+/+`, parses the §9.2 JSON envelope, and re-broadcasts
+  each logical field as an in-process `sensors/<field>` notification. This is
+  the single translation point between the wire namespace (`rmms/<uuid>/...`)
+  and the mirror-internal namespace (`sensors/...`) — see root `CLAUDE.md §9.5.1`.
+  The canonical mapping table lives at the top of its `node_helper.js`.
+- **`MMM-SensorUI`** — renders the tiles and owns **all** threshold→severity
+  logic (`green`/`yellow`/`orange`/`red`, cited to WHO/AHA/ASHRAE). It shows the
+  numeric value **and** the severity check per tile, handles the breath-hold
+  tile (`resp_motion:false` → "No breathing", ADR-0006), hyperventilation, and
+  "Measuring…" placeholders. It only consumes `sensors/...`; it never parses
+  JSON or sees `q`/`wall_ms`/`seq`.
 
-For dev/initial deployment: `socat`. One process per attached device.
+`MMM-pages` rotates between the sensor UI and other pages (e.g. video conf).
 
-```bash
-# bridge/run-bridge.sh
-exec socat -d \
-    "FILE:/dev/ttyACM0,raw,echo=0,b115200" \
-    "TCP:localhost:8883"
-```
+`MMM-MQTT` is **not** used. If you see a reference to it, it's stale.
 
-For production: a small Python service (`bridge/bridge.py`) that handles:
-- Device hotplug (re-spawn on disconnect/reconnect).
-- Multiple simultaneous devices (`/dev/ttyACM0`, `/dev/ttyACM1`, ...).
-- Android USB host permissions (more on this below).
-- Restart-on-failure within the same process (no need for Termux to
-  micromanage).
+### 4.3 Module config (live: `MagicMirror/config/config.js`)
 
-Termux's USB plugin (`termux-usb`) is required for `/dev/ttyACM*` to appear.
-Without it, Android does not expose the device to userspace. Install order:
-
-```bash
-pkg install termux-api
-# Install the Termux:USB add-on from F-Droid (NOT Google Play)
-# On first connect of a Pico, Android shows a permission dialog
-termux-usb -l                   # list attached USB devices
-termux-usb -e /dev/bus/usb/...  # grant the bridge access
-```
-
-### 4.3 What the bridge must NOT do
-
-These are bridge anti-patterns that defeat the architecture:
-
-- **Parse MQTT.** The bridge has no business looking at MQTT framing. If it
-  did, it would need to handle TLS, which means it would need device certs,
-  which means it would become a man-in-the-middle. Do not.
-- **Terminate TLS.** Same reason. The endpoint of the firmware's TLS session
-  is Mosquitto, on `localhost:8883`. The bridge is below the TLS layer.
-- **Re-encode or buffer beyond what `socat` does natively.** Bytes go in,
-  same bytes come out. Latency cost is unmeasurable; introducing buffering
-  introduces stalls.
-- **Log byte contents.** That would log TLS records, which is useless noise.
-  Log connect/disconnect events and counts; that's it.
-
-### 4.4 Android lifecycle
-
-The bridge runs under Termux, which runs as a normal Android app, which
-means Android's process lifecycle applies. Specifically:
-
-- **Doze mode** will kill the bridge if the screen is off and the device
-  is idle. Solution: the tablet runs with screen-on (it's behind the
-  mirror; the mirror UI is the screen).
-- **Battery optimization** must be disabled for Termux on
-  manufacturer-skinned Android (Samsung, Xiaomi, Huawei, OnePlus all stack
-  proprietary killers above stock Doze). Open Settings → Apps → Termux →
-  Battery → "Unrestricted" (Samsung) / "No restrictions" (Xiaomi) / similar.
-- **Termux:Boot** (separate add-on app) is required for autostart at boot —
-  Android does not auto-launch normal apps. Without it, the broker dies
-  on every reboot until someone opens Termux manually.
-
-These constraints make the tablet-as-broker model operationally fragile.
-Mitigations are in §6. **Confirm the tablet is mains-powered and never
-sleeps** before claiming the deployment works.
-
----
-
-## 5. MagicMirror²
-
-### 5.1 Run mode
-
-**Open question** — see §8. The current plan: Termux + Node.js + headless
-Chrome in kiosk mode pointing at `http://localhost:8080`. This is fragile;
-alternatives include a packaged Android wrapper or a different smart-mirror
-framework entirely.
-
-Until decided, this section documents the MM² path.
-
-### 5.2 Module configuration
-
-`magicmirror/config/config.js` is the standard MagicMirror² config plus the
-RMMS-specific module:
+`config.js` registers `clock`, `MMM-SensorUI`, `MMM-VidConf`, and
+`MMM-CustomMQTTBridge`. The bridge block carries the broker URL, the mirror
+`clientId` (= mirror cert CN), absolute paths to the mirror bundle
+(`out/mirror-<id>/{ca.crt,cert.pem,key.pem}`), and `topics: ["rmms/+/+"]`:
 
 ```javascript
-module.exports = {
-  address: "0.0.0.0",
-  port: 8080,
-  ipWhitelist: ["127.0.0.1"],   // localhost only
-  modules: [
-    {
-      module: "clock",
-      position: "top_left",
-    },
-    {
-      module: "MMM-RMMS",          // custom; see below
-      position: "middle_center",
-      config: {
-        mqttHost: "localhost",
-        mqttPort: 8883,
-        mqttCa:   "/data/data/com.termux/files/home/rmms/certs/ca.der",
-        mqttCert: "/data/data/com.termux/files/home/rmms/certs/mirror.crt",
-        mqttKey:  "/data/data/com.termux/files/home/rmms/certs/mirror.key",
-        deviceUuid: "550e8400-e29b-41d4-a716-446655440000",  // the sensor module this mirror belongs to
-      }
-    },
-  ],
-};
+{
+  module: "MMM-CustomMQTTBridge",
+  config: {
+    broker:   "mqtts://<broker-ip-or-tablet.local>:8883",
+    clientId: "mirror-<id>",                 // must equal the mirror cert CN
+    caFile:   process.env.HOME + "/.../out/mirror-<id>/ca.crt",
+    certFile: process.env.HOME + "/.../out/mirror-<id>/cert.pem",
+    keyFile:  process.env.HOME + "/.../out/mirror-<id>/key.pem",
+    topics:   ["rmms/+/+"]
+  }
+}
 ```
 
-### 5.3 The MMM-RMMS module
+> `config.js` is **untracked** (it holds the LAN-specific broker IP — commit
+> 985c189). `deploy_home_kit.sh` renders it per-home. Leaving the three file
+> paths empty + `broker: "mqtt://localhost:1883"` falls back to the plaintext
+> loopback for a no-TLS bench rig.
 
-`magicmirror/modules/MMM-RMMS/` is a **custom module**, not MMM-MQTT. The
-rationale: MMM-MQTT is a thin string-to-DOM mapper; we need a module that
-understands the RMMS UI-topic schema (see Radxa repo §11) and renders
-qualitative status, not raw values.
+### 4.4 Mirror cert
 
-Subscribes to:
-- `rmms/ui/<deviceUuid>/presence`
-- `rmms/ui/<deviceUuid>/wellness`
-- `rmms/ui/<deviceUuid>/ambient`
-- `rmms/ui/<deviceUuid>/connection`
-
-Publishes nothing. The mirror is read-only.
-
-UI rules (per the firmware repo §9.5 elderly-UX requirement):
-- **No raw numbers.** Heart rate, breath rate, exact temperatures — none of
-  these appear on the mirror.
-- **No clinical jargon.** "Wellness: OK" not "HR: normal sinus rhythm."
-- **No urgency theatre.** Red alerts and beeping are inappropriate for
-  ambient passive monitoring. Use colour and shape changes for state
-  transitions, not animations.
-- **No interactivity.** The mirror is passive. No taps, no swipes — touch
-  on the acrylic would be unreliable anyway.
-
-### 5.4 Why not MMM-MQTT directly
-
-MMM-MQTT subscribes to topics and renders the payload as a DOM string. It
-has no concept of:
-- mTLS (it's a plain MQTT client).
-- Multi-field qualitative payloads.
-- State transitions and timing (e.g., "show offline if last_seen > 60s ago").
-
-We'd end up with a wrapper that does all the real work, with MMM-MQTT as a
-useless intermediary. Just write the module directly.
-
-### 5.5 Cert for the mirror module
-
-The mirror needs its own client cert (`mirror.crt`, CN `magicmirror-client`)
-because the broker uses mTLS. The cert grants read-only access to
-`rmms/ui/+/#` per the ACL (§3.3). Provisioned during install, same flow as
-the Radxa and sensor modules.
+The mirror is a distinct MQTT identity with its own cert (CN `mirror-<id>`),
+issued by the same project CA as the device certs (`provision_ca.sh`). ACL grant:
+`topic read rmms/#`. The mirror never publishes sensor topics.
 
 ---
 
-## 6. Autostart
+## 5. mDNS (`tablet.local`)
 
-### 6.1 The dependency chain
+`scripts/tablet_mdns_responder.py` (python-zeroconf — avahi needs root/dbus and
+is unreliable in Termux) advertises `tablet.local` → the tablet's current IP and
+re-registers within ~5 s when DHCP moves it. Because the name is stable, each
+device's `/cfg/broker.json` is provisioned **once** with
+`{"host":"tablet.local","ip":""}` and never edited across networks (root
+`CLAUDE.md §8.2`). Keep the tablet **awake** during a demo — Android suppresses
+multicast RX with the screen off, which breaks resolution.
 
-Boot order matters:
-1. Android boots.
-2. Termux:Boot fires.
-3. Mosquitto starts (no dependencies).
-4. Bridge starts (requires Mosquitto + USB device).
-5. MagicMirror² starts (requires Mosquitto + display).
-
-Termux:Boot runs `~/.termux/boot/` scripts on device startup. Each script
-should be idempotent and short — long-running services go in
-`~/.termux/services/` and are managed by `termux-services` (runit).
-
-### 6.2 Files
-
-```
-autostart/
-├── boot/
-│   └── 00-start-services.sh        # → ~/.termux/boot/
-└── services/
-    ├── mosquitto/run                # → ~/.termux/services/mosquitto/run
-    ├── rmms-bridge/run              # → ~/.termux/services/rmms-bridge/run
-    └── magicmirror/run              # → ~/.termux/services/magicmirror/run
-```
-
-`00-start-services.sh`:
-```bash
-#!/data/data/com.termux/files/usr/bin/sh
-termux-wake-lock
-sv up mosquitto
-sleep 2
-sv up rmms-bridge
-sv up magicmirror
-```
-
-`services/mosquitto/run`:
-```bash
-#!/data/data/com.termux/files/usr/bin/sh
-exec 2>&1
-exec mosquitto -c $PREFIX/etc/mosquitto/mosquitto.conf
-```
-
-`services/rmms-bridge/run` (initial socat version):
-```bash
-#!/data/data/com.termux/files/usr/bin/sh
-exec 2>&1
-exec socat -d \
-    "FILE:/dev/ttyACM0,raw,echo=0,b115200" \
-    "TCP:localhost:8883"
-```
-
-`runit` restarts these services on exit automatically — no extra plumbing.
-
-### 6.3 `termux-wake-lock`
-
-**Always called before starting services.** Prevents Android from
-suspending Termux. Released only when all services stop (cleanly or via
-`termux-wake-unlock`).
-
-Without `termux-wake-lock`, Doze will kill everything within minutes once
-the screen goes off. With the wake lock + Doze whitelist (§4.4), the
-services stay up.
+The previous group's UDP-broadcast discovery is dead and must not return. If a
+LAN has no multicast, the fallback is to re-provision `broker.json` with a
+literal IP.
 
 ---
 
-## 7. Installation (the deployment script for the tablet)
+## 6. Presence → screen coupling
 
-`install.sh` runs in Termux and does:
-
-1. Check Termux version (≥ 0.119 for current Termux:USB).
-2. Install required packages: `pkg install mosquitto socat openssl
-   nodejs-lts python`.
-3. Install MagicMirror² (`git clone`, `npm install --production`).
-4. Prompt for and store certs in `~/rmms/certs/` (mode 0600).
-5. Copy configs from this repo to their Termux paths.
-6. Symlink autostart scripts to `~/.termux/boot/` and `~/.termux/services/`.
-7. Print install summary with broker IP, listener port, cert paths, and
-   the next-steps checklist (open Battery settings, install Termux:Boot
-   from F-Droid, install Termux:USB from F-Droid, grant USB device
-   permission to Termux).
-
-**Manual steps that cannot be scripted** (Android does not allow it):
-- Disabling battery optimization for Termux.
-- Installing Termux:Boot and Termux:USB add-ons (must be from F-Droid; not
-  on Play Store).
-- First-time USB device permission grant on device connect.
-
-Document these in the install script's final output so the operator does
-them in the right order.
+`scripts/tablet_presence_screen.py` reads `rmms/<uuid>/radar` from the mTLS
+`:8883` listener (mirror cert), debounces presence, and publishes ON/OFF to the
+`display` topic on the loopback `:1883` listener, which the `HealthMonitorWakeTest`
+Android app consumes to wake/lock the screen. Debounce defaults: 2 s on-delay,
+10 s off-delay, 30 s keepalive, 15 s stale timeout
+([presence_screen_coupling.md](presence_screen_coupling.md), ADR-0004). This
+keeps presentation logic off the firmware — the device just publishes raw radar.
 
 ---
 
-## 8. Open questions (BLOCKING — resolve before claiming v1)
+## 7. Autostart (self-healing)
 
-1. **Tablet model and Android version.** Specific tablet not yet selected.
-   Critical specs: ≥ 4 GB RAM (Mosquitto + Node.js + Chrome is ~800 MB
-   resident), USB-C host mode support, Android 10+ for current Termux
-   compatibility, no aggressive vendor process-killing (avoid Xiaomi
-   without serious workaround effort).
-2. **MagicMirror² run mode.** Termux + Chrome kiosk vs. a packaged WebView
-   wrapper vs. a different smart-mirror framework. See §5.1.
-3. **Bridge implementation path.** Start with socat; promote to Python
-   service when multi-device support is needed. When does that happen?
-4. **Termux:Boot reliability across vendor skins.** Confirmed working on
-   stock Android; needs validation on whatever tablet is chosen.
-5. **mDNS responder on Termux.** The firmware (§8.2 of firmware repo) wants
-   to resolve `_mqtt._tcp.local`. Avahi is not in Termux packages.
-   Alternatives: Bonjour through Java/JNI (complex), or skip mDNS and use
-   static IP (simpler, fragile to DHCP changes). Currently leaning toward
-   static IP with a configured fallback.
-6. **Time push to firmware.** If the RTC sync mechanism (firmware §16
-   question 6) is decided as "tablet pushes time over MQTT," that
-   publisher runs from this repo as a small Python script alongside the
-   bridge. Owner of that decision is the firmware team, but the
-   implementation lands here.
+Termux:Boot runs `scripts/tablet_boot.sh` (symlinked to `~/.termux/boot/10-rmms`)
+on device startup. It is idempotent (`pgrep`-guarded) and brings up, in order:
+acquire `termux-wake-lock` → wait for Wi-Fi → sshd → mosquitto → mDNS responder
+→ presence bridge → MagicMirror². `runit`/the script restart services on death.
+
+The tablet self-heals on reboot with no laptop and no fixed IP (mDNS). Two
+**manual, un-scriptable** Android prerequisites (Android restrictions):
+
+- **Disable battery optimization for Termux** — otherwise Doze kills everything
+  within minutes even with the wake-lock.
+- **Install Termux:Boot from F-Droid** (not Play Store) and **unlock the device
+  once** after boot — Termux:Boot only fires after the first unlock.
+
+Keep the tablet mains-powered and never let the display sleep (the mirror UI
+*is* the screen).
 
 ---
 
-## 9. Non-goals (v1)
+## 8. Installation / deployment
 
-- Web admin UI for the tablet stack. Operations via SSH-into-Termux or by
-  unplugging the tablet and editing files via adb.
-- OTA updates of the tablet software. Updates via reinstall.
-- Multiple sensor modules per tablet. Architecturally supported (ACL
-  pattern matches), but operationally one module per home for v1.
-- Tablet-side data analysis. The tablet is a broker and a display, nothing
-  else. Analysis lives on the Radxa.
-- Tablet-side caching of MagicMirror² state. If the tablet reboots, the
-  mirror starts blank until the next sample arrives.
-- Voice interaction, accessibility features, multilingual UI. All future
-  work.
+Driven from the workstation by the tablet phase of
+`scripts/deploy_home_kit.sh tablet <home-id> <tablet-ip>`, which: copies broker
+certs + `mosquitto.conf` + `acl` to `~/rmms/`, copies the mirror bundle, installs
+`tablet_boot.sh` as the Termux:Boot hook, renders `config.js`, optionally runs a
+one-time Termux bootstrap (`pkg install` of openssh/mosquitto/python/nodejs +
+`python-zeroconf`/`paho-mqtt`), and starts everything.
+
+For a quick demo session, `scripts/demo_start.sh <tablet-ip>` re-mints the broker
+cert for today's IP, (re)starts the mDNS responder + presence bridge, and relies
+on the tablet's own Termux:Boot to keep mosquitto and MagicMirror up. SSH bootstrap
+is one-time via `scripts/setup_tablet_ssh.sh <tablet-ip>`.
+
+**Manual steps** (see §7): battery-opt off, Termux:Boot + add-ons from F-Droid,
+unlock once after boot.
 
 ---
 
-## 10. References
+## 9. Open questions
 
-- Firmware repo `CLAUDE.md` — sensor module side, especially §8.2 (Wi-Fi
-  transport), §9 (MQTT contract), §9.5 (UI-presentation topic boundary),
-  §10 (security model).
-- Radxa repo `CLAUDE.md` — aggregator side, especially §11 (UI publisher,
-  which defines what topics this tablet's MagicMirror² subscribes to).
-- Mosquitto config docs: <https://mosquitto.org/man/mosquitto-conf-5.html>.
+1. **Tablet model / Android version.** Not finalized. Needs ≥4 GB RAM, Android
+   10+, near-stock (avoid aggressive vendor process-killers).
+
+**Resolved (do not reopen):**
+- MagicMirror² run mode — Termux + `npm run server` + Chrome (§4.1, root §16 Q4).
+- MMM bridge choice — `MMM-CustomMQTTBridge` (root §16 Q5).
+- mDNS on Termux — python-zeroconf responder, `tablet.local` (§5, root §8.2).
+- Time sync — a publisher on the broker LAN sends `rmms/<uuid>/time/set` when a
+  device connects (ADR-0003; in the live stack this is the SBC aggregator,
+  `sbc/src/rmms_aggregator/mqtt/publisher.py`); the tablet broker just relays it.
+  The firmware stamps `wall_ms` from it (root §9.2.5).
+- Transport — Wi-Fi only; **no USB-MQTT bridge** (ADR-0002).
+
+---
+
+## 10. Non-goals (v1)
+
+- USB-MQTT bridge / any USB data path (removed — ADR-0002).
+- A `rmms/ui/...` namespace or any firmware-republished UI topics (none exists).
+- Web admin UI for the tablet stack (operate via SSH-into-Termux).
+- OTA of the tablet software (reinstall).
+- Tablet-side data analysis or FHIR (that is the SBC's job — `sbc/`).
+- Voice / accessibility / multilingual UI.
+
+---
+
+## 11. References
+
+- Root `CLAUDE.md` — especially §8.2 (Wi-Fi transport), §9.1/§9.2 (MQTT
+  contract + JSON), §9.5 / §9.5.1 (mirror boundary + bridge mapping), §10
+  (security model), §16 (resolved open questions).
+- [ADR-0002](adr/0002-wifi-sole-transport.md) — Wi-Fi sole transport (USB-CDC
+  and the byte-pipe bridge removed).
+- [ADR-0004](adr/0004-localhost-plain-listener-app-ipc.md) — the loopback
+  `:1883` app-IPC listener.
+- [presence_screen_coupling.md](presence_screen_coupling.md) — debounce spec.
+- `sbc/CLAUDE.md` — the aggregator + FHIR translator.
+- Mosquitto config: <https://mosquitto.org/man/mosquitto-conf-5.html>.
 - Termux:Boot: <https://github.com/termux/termux-boot>.
-- Termux:USB: <https://github.com/termux/termux-usb>.
-- Termux Services (runit): <https://wiki.termux.com/wiki/Termux-services>.
-- MagicMirror² docs: <https://docs.magicmirror.builders/>.
+- MagicMirror²: <https://docs.magicmirror.builders/>.
 
 ---
 
-## 11. Instructions for Claude Code specifically
+## 12. Instructions for Claude Code specifically
 
-When working in this repository:
-
-- **Always read this file before proposing a change.** Cite the section if
-  a proposal conflicts.
-- **The bridge is a dumb byte pipe.** Do not add MQTT parsing, TLS
-  termination, or content inspection to it. If you find yourself wanting
-  to, you are solving the wrong problem.
-- **No credentials, certs, or `.env` files in this repo.** All certs live
-  on the tablet's filesystem; the install script copies them, never
-  commits them.
-- **MMM-MQTT is not used.** If you find a reference to it, it's wrong.
-  See §5.4.
-- **The mirror is read-only.** It subscribes; it does not publish.
-- **No raw numeric vitals on the mirror UI.** Per firmware §9.5 and the
-  elderly-UX requirement.
-- **Mosquitto config is one file.** Do not split into `mosquitto-main.conf`
-  + `mosquitto-tls.conf` + an Include directive. The previous group did
-  this and the audit catches it (their config required two listeners but
-  documented one).
-- **Termux is not a generic Linux.** Paths start with
-  `/data/data/com.termux/files/`. systemd does not exist. Use runit via
-  termux-services for daemons.
-- When asked to "make it autostart", first answer: is Termux:Boot
-  installed and the wake-lock acquired? If not, no Android-side hack will
-  make this work.
-
-### 11.1 Anti-patterns to avoid
-
-| Don't | Do |
-|---|---|
-| Hardcode the tablet's IP into the firmware or Radxa configs | Use mDNS (when supported) or env-var-driven static config |
-| Run Mosquitto on the default :1883 plaintext listener | Only `:8883` with mTLS — single listener, like firmware repo §8 |
-| Skip `termux-wake-lock` "to save battery" | The tablet is mains-powered; the wake lock is mandatory |
-| Embed the bridge logic into MagicMirror² as a "module" | Three separate processes, three separate failure domains |
-| Use `mosquitto_pub` from a shell script as the time-sync publisher | If the firmware needs time, write a small Python service that watches the cert directory and publishes on broker reconnect |
-| Use `setInterval` in the MagicMirror² module to poll | The MM² module API supports MQTT message events directly — use them |
+- **Read this file and the root `CLAUDE.md` before changing the tablet tier.**
+  Cite the section if a proposal conflicts.
+- **There is no bridge to add MQTT/TLS logic to.** USB-CDC and the byte pipe are
+  gone (ADR-0002). Do not reintroduce them without a new ADR.
+- **The mirror reads raw `rmms/<uuid>/...` topics.** Threshold/severity logic
+  lives in `MMM-SensorUI.js`; the wire→`sensors/*` mapping lives in
+  `MMM-CustomMQTTBridge/node_helper.js`. There is no `rmms/ui/...` namespace.
+- **The mirror shows numbers + severity per tile.** Do not strip numeric values.
+- **No credentials, certs, or LAN IPs committed.** Certs live on the tablet /
+  in `out/` (gitignored); `config.js` is untracked.
+- **Mosquitto config is one file with two listeners** (`:8883` mTLS network,
+  `:1883` loopback IPC). Do not add a network-facing plaintext listener.
+- **Termux is not generic Linux.** Paths start with `/data/data/com.termux/...`;
+  there is no systemd. Autostart is Termux:Boot + a wake-lock — if those aren't
+  set up, no hack will keep services alive.

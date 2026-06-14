@@ -6,7 +6,7 @@
  * Sourced from §11 canonical paths:
  *   /cfg/wifi.json      — {"_v":1,"ssid":"...","psk":"...","country":"NL"}
  *   /cfg/broker.json    — {"_v":1,"host":"tablet.local","ip":"...","port":8883}
- *   /cfg/sensors.json   — {"_v":1,"radar":"bha2"}
+ *   /cfg/sensors.json   — {"_v":1,"radar":"bha2"|"hmmd"}
  *
  * All loaders return ERR_OK on success, ERR_NOT_FOUND if the file is absent
  * (device not yet provisioned), ERR_PARSE on malformed JSON, ERR_INVALID_ARG
@@ -33,10 +33,12 @@ typedef struct {
     uint16_t port;
 } CfgBroker;
 
-/* Radar driver selection (CLAUDE.md §3.2 / §7.4). */
+/* Radar driver selection (CLAUDE.md §3.2 / §7.4). Two radars share the UART
+ * footprint and one driver v-table; ADR-0007 added the HMMD variant. */
 typedef enum {
     CFG_RADAR_NONE  = 0,
-    CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz (sole v1 radar) */
+    CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz heart + breath */
+    CFG_RADAR_HMMD,     /* Seeed 24 GHz HMMD micro-motion module (ADR-0007) */
 } CfgRadarKind;
 
 /* Environmental-sensor selection. The PCB exposes a single I²C footprint

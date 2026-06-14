@@ -3,9 +3,13 @@
 
 /* Abstract radar driver interface.
  *
- * v1 ships a single radar, the Seeed MR60BHA2 (60 GHz), behind this common
- * vtable.  The vtable is the extensibility seam for a future radar; selection
- * is by config flag in /cfg/sensors.json, not by runtime UART probing.
+ * Two radars sit behind this common vtable, selected by the "radar" flag in
+ * /cfg/sensors.json (not by runtime UART probing):
+ *   - "bha2": Seeed MR60BHA2 (60 GHz, heart + breath + breath-phase)
+ *   - "hmmd": Seeed 24 GHz HMMD micro-motion module (ADR-0007)
+ * Both produce the same RadarSample; radar_task and the §9.2 wire schema are
+ * unaware of which is attached.  The vtable is the extensibility seam for any
+ * further radar: a new radar_*.c file plus one line in radar_select.c.
  *
  * See CLAUDE.md §7.4 and §3.2 for the design rationale.
  */
@@ -93,16 +97,19 @@ typedef struct {
     void *ctx;
 } radar_driver_t;
 
-/* ── Driver constructors (implemented in radar_bha2.c) ───────────────────── */
+/* ── Driver constructors ─────────────────────────────────────────────────── */
 
-/** Return a pointer to the static MR60BHA2 driver struct. */
+/** Return a pointer to the static MR60BHA2 driver struct (radar_bha2.c). */
 radar_driver_t *radar_bha2_driver(void);
+
+/** Return a pointer to the static 24 GHz HMMD driver struct (radar_hmmd.c). */
+radar_driver_t *radar_hmmd_driver(void);
 
 /* ── Config-driven selection (implemented in radar_select.c) ─────────────── */
 
 /**
- * Read /cfg/sensors.json, parse the "radar" key ("bha2"), and return the
- * corresponding driver.
+ * Read /cfg/sensors.json, parse the "radar" key ("bha2" | "hmmd"), and return
+ * the corresponding driver.
  *
  * @return Pointer to a static driver struct, or NULL if config is missing
  *         or unknown.

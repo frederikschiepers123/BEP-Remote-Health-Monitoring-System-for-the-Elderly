@@ -85,7 +85,8 @@ err_t cfg_load_sensors(CfgSensors *out) {
     char kind[16];
     e = json_get_string(buf, toks, n, "radar", kind, sizeof(kind));
     if (e != ERR_OK) { LOG_E("sensors.json: 'radar' missing"); return ERR_INVALID_ARG; }
-    if (strcmp(kind, "bha2") == 0) out->radar = CFG_RADAR_BHA2;
+    if      (strcmp(kind, "bha2") == 0) out->radar = CFG_RADAR_BHA2;
+    else if (strcmp(kind, "hmmd") == 0) out->radar = CFG_RADAR_HMMD;
     else { LOG_E("sensors.json: unknown radar '%s'", kind); return ERR_INVALID_ARG; }
 
     /* `env` is optional; absent means BME280 (back-compat with existing

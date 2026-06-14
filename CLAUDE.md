@@ -190,12 +190,21 @@ The firmware does **not** own:
 | Buttons          | 2× momentary           | GPIO | Internal pull-up, hardware debounce optional   |
 | LEDs             | Status indicators      | GPIO | Plus CYW43 onboard LED for net-state           |
 
-**Radar driver architecture:** The MR60BHA2 is the sole radar in v1. It sits
-behind a `radar_driver_t` v-table (§7.4) so that a future radar is a new
-`radar_*.c` file plus one line in `radar_select.c` — no change to the task,
-topics, or payload schema. The v-table is the extensibility seam, not a
-runtime A/B switch: there is exactly one driver to select. (The DFRobot C1001,
-a 24 GHz alternative previously carried here, was removed from the project.)
+**Radar driver architecture:** Two radars sit behind the `radar_driver_t`
+v-table (§7.4), selected by `/cfg/sensors.json` `"radar"` (config flag, not
+runtime UART probing):
+- `"bha2"` — Seeed MR60BHA2 (60 GHz, heart + breath + breath-phase), the
+  **advanced** module's radar and what this project demos.
+- `"hmmd"` — Seeed 24 GHz HMMD micro-motion module, the **generic** module's
+  radar (ADR-0001, ADR-0007). Adding it was a new `radar_*.c` file plus one
+  line in `radar_select.c` — no change to the task, topics, or payload schema,
+  exactly as the seam promises. Reports presence + respiration (+ distance);
+  it has no breath-phase stream, so `resp_motion` degrades to `null`
+  (graceful), and it often reports no heart rate (`heart_bpm` → `null`, §9.2.2).
+
+A third radar is again a new `radar_*.c` plus one `radar_select.c` branch. (The
+DFRobot C1001, a different 24 GHz alternative briefly carried here, was removed
+from the project and is unrelated to the HMMD module.)
 
 **Note on framing (bench-resolved):** The Seeed MR60BHA2 does **not** use the
 Andar/AI-Thinker `0x53 0x59` / `0x54 0x43` framing. Bring-up of the live
@@ -301,7 +310,8 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   ├── sensor_air/               # ENS160 driver + air_task (consumes env's
 │   │   │                         #   temp/hum for TEMP_IN/RH_IN compensation)
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
-│   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (Seeed framing)
+│   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (60 GHz, SOF-0x01 framing)
+│   │   ├── radar_hmmd.c          # Seeed 24 GHz HMMD driver (0x53 0x59…0x54 0x43, ADR-0007)
 │   │   └── radar_select.c        # Reads /cfg/sensors.json, returns the driver
 │   ├── sensor_light/             # BH1750 (I²C lux) driver + light_task
 │   ├── cfg/                      # /cfg/{wifi,broker,sensors}.json loaders
@@ -385,10 +395,11 @@ radar_driver_t *radar_select_from_config(void);   // reads /cfg/sensors.json
 ```
 
 The `radar_task` calls `read_sample()` in a loop and is **completely unaware**
-of which radar is attached. A future radar requires a new `radar_*.c` file and
+of which radar is attached. A further radar requires a new `radar_*.c` file and
 a new entry in `radar_select.c`. It does **not** require changes to the task,
-to MQTT topics, or to the payload schema. (v1 ships a single driver, the
-MR60BHA2; the v-table is kept as the extensibility seam.)
+to MQTT topics, or to the payload schema. (v1 ships two drivers — `radar_bha2.c`
+and `radar_hmmd.c`, ADR-0007 — behind this v-table; the seam carries any
+further radar.)
 
 `radar_sample_t` is the lowest-common-denominator a radar produces: presence
 (bool), distance (mm, nullable), breath rate (BPM, nullable), heart rate (BPM,
@@ -1015,7 +1026,7 @@ littlefs — it is a raw circular log; see ADR-0003.)
   wifi.json      # {"ssid":"...","psk":"...","country":"NL"}
   broker.json    # {"host":"tablet.local","ip":"192.168.1.50","port":8883}
   device.json    # {"uuid":"...","label":"...","location":"..."}
-  sensors.json   # {"radar":"bha2"|"c1001", ...}
+  sensors.json   # {"radar":"bha2"|"hmmd", ...}
 /certs/
   ca.der         # project CA (factory-written, treated as read-only)
   dev.crt        # device cert, factory-written
@@ -1261,7 +1272,9 @@ Resolve each, then strip the TODO.
 2. ~~**Radar framing parity.**~~ **Resolved.** Bench bring-up of a live
    MR60BHA2 confirmed it does NOT use Andar `0x53 0x59` / `0x54 0x43` framing.
    It uses its own 8-byte SOF-`0x01` header with `~XOR` checksums; see §3.2.
-   (Moot now that the C1001 has been removed — the MR60BHA2 is the only radar.)
+   The second radar, the 24 GHz HMMD module (`radar_hmmd.c`, ADR-0007), *does*
+   use that `0x53 0x59 … 0x54 0x43` framing — the two are distinct protocols
+   behind the one v-table, which is exactly why the parity question mattered.
 3. ~~**Tablet bridge ownership.**~~ **Moot for v1.** The `/dev/ttyACMx ↔
    localhost:8883` byte pipe only exists for the USB-CDC transport, which is
    out of scope for v1 (§2.1). If USB-CDC is revived post-v1, the bridge (a
@@ -1321,11 +1334,16 @@ Resolve each, then strip the TODO.
   USB-CDC-era custom `stream_t` stack (`transport_usb`, `transport_selector`,
   `tls_context`, `mqtt_client`, `transport_wifi`) was **deleted**; its design
   lives in ADR-0002. Reviving USB-CDC is a post-v1 ADR (§2.1, §2.2, §8.1, §17).
-- **DFRobot C1001 radar removed from the project:** v1 ships only the
-  MR60BHA2. The `radar_driver_t` v-table is retained for a future radar
-  (§3.2, §7.4).
-- mmWave radar: Seeed MR60BHA2 only, behind the `radar_driver_t` v-table
-  (kept as the extensibility seam for a future radar).
+- **Second radar driver — 24 GHz HMMD (ADR-0007):** v1 now ships **two** radar
+  drivers behind the `radar_driver_t` v-table, selected by `/cfg/sensors.json`
+  `"radar"`: `"bha2"` (Seeed MR60BHA2, advanced module) and `"hmmd"` (Seeed
+  24 GHz HMMD micro-motion, the generic module's radar per ADR-0001). New file
+  `components/sensor_radar/radar_hmmd.c` + one `radar_select.c` branch + one
+  `CfgRadarKind` value — no change to the task, the `rmms/<uuid>/radar` topic,
+  or the §9.2 schema, exactly as the seam promises (§3.2, §7.4).
+- **DFRobot C1001 radar removed from the project:** a *different* 24 GHz
+  alternative briefly carried here, unrelated to the HMMD module; deleted. The
+  `radar_driver_t` v-table now carries the MR60BHA2 + HMMD pair (§3.2, §7.4).
 - TLS scope: mTLS over Wi-Fi (the sole v1 transport), static cert chain. The
   USB-CDC transport (and its mTLS) is out of scope for v1 (§2.1).
 - Face recognition: descoped from v1 entirely (see §17).

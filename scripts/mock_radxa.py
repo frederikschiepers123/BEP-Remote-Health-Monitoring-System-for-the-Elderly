@@ -1,24 +1,35 @@
 """
-mock_radxa.py — development stand-in for the Radxa aggregation service.
+mock_radxa.py — raw-topic sniffer for the RMMS sensor module.
 
-Subscribes to raw sensor topics published by the firmware, applies simple
-threshold logic, and republishes qualitative summaries to rmms/ui/<uuid>/...
-so that MagicMirror² / MMM-RMMS can be tested without the full Radxa service.
+⚠️  DEPRECATED ROLE — read this before using.
 
-This script is intentionally simple — it is a dev tool, not production code.
-For the real implementation see docs/CLAUDE_radxa.md.
+    This script used to stand in for the Radxa aggregator by republishing
+    qualitative summaries to a `rmms/ui/<uuid>/...` namespace for an old
+    MagicMirror² module (`MMM-RMMS`). **That whole path is dead:**
+
+      • There is no `rmms/ui/...` namespace anymore. The mirror subscribes to
+        the firmware's RAW `rmms/<uuid>/...` topics directly via
+        `MMM-CustomMQTTBridge` → `MMM-SensorUI` (root CLAUDE.md §9.5).
+      • The real aggregator + FHIR translator now lives in `sbc/`
+        (sbc/CLAUDE.md). For anything resembling production behaviour — FHIR
+        Observations, store-and-forward, time-sync publishing — run that, e.g.
+        `cd sbc && docker compose -f docker-compose.dev.yml up` (local HAPI).
+
+    So this file no longer publishes anything. It is now a small, read-only
+    DEV TOOL: subscribe to one device's raw topics, decode the §9.2 JSON
+    envelope, and pretty-print the values + a quick qualitative sanity label to
+    stdout. Handy for a "is the Pico publishing sane data?" check during a demo
+    without the mirror or the SBC.
 
 Usage:
-    python mock_radxa.py --uuid <device-uuid> --host <broker-host>
-
-    # With mTLS (same certs as the real Radxa would use):
+    # mTLS (same cert bundle the mirror/SBC would use):
     python mock_radxa.py --uuid <uuid> --host tablet.local \
-        --ca   /path/to/ca.der \
-        --cert /path/to/radxa.crt \
-        --key  /path/to/radxa.key
+        --ca   ~/rmms-ca/ca.crt \
+        --cert out/mirror-<id>/cert.pem \
+        --key  out/mirror-<id>/key.pem
 
-    # Without TLS (only works if broker allows it — not default):
-    python mock_radxa.py --uuid <uuid> --host localhost --no-tls
+    # No TLS (only against the broker's loopback :1883 dev listener):
+    python mock_radxa.py --uuid <uuid> --host localhost --port 1883 --no-tls
 
 Requirements:
     pip install paho-mqtt
@@ -28,238 +39,136 @@ import argparse
 import json
 import ssl
 import sys
-import time
 
 import paho.mqtt.client as mqtt
 
-# ── Thresholds ────────────────────────────────────────────────────────────────
-# These are placeholder values for development only.
-# The real service uses clinically sourced thresholds — see CLAUDE_radxa.md §11.2.
+# ── Qualitative sanity labels (DEV ONLY) ──────────────────────────────────────
+# Placeholder ranges just for a readable console summary. The real clinical
+# thresholds live on the mirror (MMM-SensorUI.js) and the SBC — not here.
 
-HEART_OK_MIN    = 50.0   # bpm
-HEART_OK_MAX    = 100.0
-HEART_CHECK_MIN = 40.0
-HEART_CHECK_MAX = 120.0
+HEART_OK_MIN, HEART_OK_MAX = 50.0, 100.0      # bpm
+HEART_CHECK_MIN, HEART_CHECK_MAX = 40.0, 120.0
 
-BREATH_OK_MIN    = 12.0  # rpm
-BREATH_OK_MAX    = 20.0
-BREATH_CHECK_MIN = 8.0
-BREATH_CHECK_MAX = 25.0
+BREATH_OK_MIN, BREATH_OK_MAX = 12.0, 20.0     # rpm
+BREATH_CHECK_MIN, BREATH_CHECK_MAX = 8.0, 25.0
 
-TEMP_COLD_MAX       = 18.0  # °C
-TEMP_COMFORTABLE_MAX = 24.0
-
-HUM_GOOD_MIN = 30.0  # %
-HUM_GOOD_MAX = 70.0
-
-# ── State ─────────────────────────────────────────────────────────────────────
-
-state = {
-    "presence":    False,
-    "heart_bpm":   None,
-    "breath_bpm":  None,
-    "temp_c":      None,
-    "hum_pct":     None,
-    "online":      False,
-    "last_seen_ms": 0,
-    "wellness_since_ms": 0,
-    "wellness_status": "ok",
-}
+TEMP_COLD_MAX, TEMP_COMFORTABLE_MAX = 18.0, 24.0   # °C
+HUM_GOOD_MIN, HUM_GOOD_MAX = 30.0, 70.0            # %
 
 
-# ── Threshold logic ───────────────────────────────────────────────────────────
-
-def calc_wellness():
-    heart  = state["heart_bpm"]
-    breath = state["breath_bpm"]
-
+def wellness_label(heart, breath):
     if heart is None and breath is None:
-        return "ok"   # no data yet — don't alarm
-
+        return "no-data"
     status = "ok"
-
     if heart is not None:
         if heart < HEART_CHECK_MIN or heart > HEART_CHECK_MAX:
             status = "alert"
         elif heart < HEART_OK_MIN or heart > HEART_OK_MAX:
             status = "check"
-
     if breath is not None:
         if breath < BREATH_CHECK_MIN or breath > BREATH_CHECK_MAX:
             status = "alert"
-        elif (status != "alert" and
-              (breath < BREATH_OK_MIN or breath > BREATH_OK_MAX)):
+        elif status != "alert" and (breath < BREATH_OK_MIN or breath > BREATH_OK_MAX):
             status = "check"
-
     return status
 
 
-def calc_temp_label():
-    t = state["temp_c"]
+def temp_label(t):
     if t is None:
-        return "comfortable"
+        return "?"
     if t < TEMP_COLD_MAX:
         return "cold"
-    if t < TEMP_COMFORTABLE_MAX:
-        return "comfortable"
-    return "warm"
+    return "comfortable" if t < TEMP_COMFORTABLE_MAX else "warm"
 
 
-def calc_air_label():
-    h = state["hum_pct"]
+def hum_label(h):
     if h is None:
-        return "good"
+        return "?"
     return "good" if HUM_GOOD_MIN <= h <= HUM_GOOD_MAX else "poor"
-
-
-def calc_confidence():
-    # Simplified: real service would use distance + signal quality
-    return "high" if state["presence"] else "low"
-
-
-def now_ms():
-    return int(time.monotonic() * 1000)
 
 
 # ── MQTT callbacks ────────────────────────────────────────────────────────────
 
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc != 0:
-        print(f"[mock_radxa] broker connection failed: rc={rc}", flush=True)
+        print(f"[tap] broker connection failed: rc={rc}", flush=True)
         return
-
     uuid = userdata["uuid"]
-    print(f"[mock_radxa] connected — subscribing to rmms/{uuid}/...", flush=True)
-
-    client.subscribe(f"rmms/{uuid}/env",    qos=1)
-    client.subscribe(f"rmms/{uuid}/radar",  qos=1)
-    client.subscribe(f"rmms/{uuid}/light",  qos=1)
-    client.subscribe(f"rmms/{uuid}/status", qos=1)
+    # One-level wildcard catches env / air / radar / light / status / log.
+    client.subscribe(f"rmms/{uuid}/+", qos=1)
+    print(f"[tap] connected — sniffing rmms/{uuid}/+ (read-only)", flush=True)
 
 
 def on_message(client, userdata, msg):
-    uuid   = userdata["uuid"]
-    topic  = msg.topic
-    suffix = topic.removeprefix(f"rmms/{uuid}/")
+    uuid = userdata["uuid"]
+    suffix = msg.topic.removeprefix(f"rmms/{uuid}/")
 
     try:
         payload_str = msg.payload.decode("utf-8")
-    except Exception:
-        print(f"[mock_radxa] cannot decode payload on {topic}", flush=True)
+    except UnicodeDecodeError:
+        print(f"[tap] {suffix}: <non-utf8 payload>", flush=True)
         return
 
-    # status is a plain string, not JSON
+    # status / log are plain strings, not JSON envelopes.
     if suffix == "status":
-        state["online"] = (payload_str.strip('"') == "online")
-        state["last_seen_ms"] = now_ms()
-        publish_connection(client, uuid)
+        print(f"[tap] status   : {payload_str.strip()}", flush=True)
+        return
+    if suffix == "log":
+        print(f"[tap] log      : {payload_str.strip()}", flush=True)
         return
 
     try:
         data = json.loads(payload_str)
     except json.JSONDecodeError as e:
-        print(f"[mock_radxa] JSON parse error on {topic}: {e}", flush=True)
+        print(f"[tap] {suffix}: JSON parse error: {e}", flush=True)
         return
 
     q = data.get("q", 3)
+    seq = data.get("seq", "?")
     v = data.get("v", {})
+    qtag = {0: "ok", 1: "stale", 2: "degraded", 3: "invalid"}.get(q, f"q{q}")
 
     if suffix == "env":
-        if q <= 2:   # ok or degraded — use the value
-            state["temp_c"]  = v.get("temp_c")
-            state["hum_pct"] = v.get("hum_pct")
-        publish_ambient(client, uuid)
-        publish_temperature(client, uuid)
+        t, h, p = v.get("temp_c"), v.get("hum_pct"), v.get("pres_hpa")
+        pres = "null" if p is None else f"{p:.1f}hPa"
+        print(f"[tap] env  #{seq:<5} [{qtag}]: {t}°C / {h}% / {pres}  "
+              f"({temp_label(t)}, hum {hum_label(h)})", flush=True)
+
+    elif suffix == "air":
+        print(f"[tap] air  #{seq:<5} [{qtag}]: CO2={v.get('co2_ppm')}ppm  "
+              f"TVOC={v.get('tvoc_ppb')}ppb  AQI={v.get('aqi')}", flush=True)
 
     elif suffix == "radar":
-        if q <= 2:
-            state["presence"]   = v.get("presence", False)
-            state["heart_bpm"]  = v.get("heart_bpm")
-            state["breath_bpm"] = v.get("breath_bpm")
-        state["last_seen_ms"] = now_ms()
-        publish_presence(client, uuid)
-        publish_wellness(client, uuid)
-        publish_heart_rate(client, uuid)
-        publish_connection(client, uuid)
+        rm = v.get("resp_motion")
+        rm_s = "?" if rm is None else ("motion" if rm else "NO-MOTION")
+        print(f"[tap] radar#{seq:<5} [{qtag}]: present={v.get('presence')}  "
+              f"dist={v.get('distance_mm')}mm  breath={v.get('breath_bpm')}  "
+              f"heart={v.get('heart_bpm')}  resp={rm_s}  "
+              f"(wellness {wellness_label(v.get('heart_bpm'), v.get('breath_bpm'))})",
+              flush=True)
 
     elif suffix == "light":
-        pass   # lux not surfaced on mirror
+        print(f"[tap] light#{seq:<5} [{qtag}]: {v.get('lux')} lux", flush=True)
 
-
-def publish_presence(client, uuid):
-    payload = json.dumps({
-        "present":    state["presence"],
-        "confidence": calc_confidence(),
-    })
-    client.publish(f"rmms/ui/{uuid}/presence", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → presence  {payload}", flush=True)
-
-
-def publish_wellness(client, uuid):
-    new_status = calc_wellness()
-    if new_status != state["wellness_status"]:
-        state["wellness_since_ms"] = now_ms()
-        state["wellness_status"]   = new_status
-
-    payload = json.dumps({
-        "status":   state["wellness_status"],
-        "since_ms": now_ms() - state["wellness_since_ms"],
-    })
-    client.publish(f"rmms/ui/{uuid}/wellness", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → wellness  {payload}", flush=True)
-
-
-def publish_ambient(client, uuid):
-    payload = json.dumps({
-        "temp": calc_temp_label(),
-        "air":  calc_air_label(),
-    })
-    client.publish(f"rmms/ui/{uuid}/ambient", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → ambient   {payload}", flush=True)
-
-
-def publish_heart_rate(client, uuid):
-    bpm = state["heart_bpm"]
-    if bpm is None:
-        return   # no reading yet — don't publish null
-    payload = json.dumps({"bpm": round(bpm, 1)})
-    client.publish(f"rmms/ui/{uuid}/heart_rate", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → heart_rate {payload}", flush=True)
-
-
-def publish_temperature(client, uuid):
-    temp = state["temp_c"]
-    if temp is None:
-        return   # no reading yet — don't publish null
-    payload = json.dumps({"temp_c": round(temp, 1)})
-    client.publish(f"rmms/ui/{uuid}/temperature", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → temperature {payload}", flush=True)
-
-
-def publish_connection(client, uuid):
-    payload = json.dumps({
-        "online":       state["online"],
-        "last_seen_ms": now_ms() - state["last_seen_ms"],
-    })
-    client.publish(f"rmms/ui/{uuid}/connection", payload, qos=1, retain=True)
-    print(f"[mock_radxa] → connection {payload}", flush=True)
+    else:
+        print(f"[tap] {suffix} #{seq} [{qtag}]: {v}", flush=True)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Mock Radxa UI publisher")
-    parser.add_argument("--uuid",   required=True, help="Sensor module UUID")
-    parser.add_argument("--host",   default="localhost", help="Broker hostname or IP")
-    parser.add_argument("--port",   type=int, default=8883, help="Broker port")
-    parser.add_argument("--ca",     default=None, help="CA certificate path (.der or .pem)")
-    parser.add_argument("--cert",   default=None, help="Client certificate path")
-    parser.add_argument("--key",    default=None, help="Client private key path")
-    parser.add_argument("--no-tls", action="store_true", help="Disable TLS (dev only)")
+    parser = argparse.ArgumentParser(description="RMMS raw-topic sniffer (read-only dev tool)")
+    parser.add_argument("--uuid", required=True, help="Sensor module UUID")
+    parser.add_argument("--host", default="localhost", help="Broker hostname or IP")
+    parser.add_argument("--port", type=int, default=8883, help="Broker port (8883 mTLS / 1883 loopback)")
+    parser.add_argument("--ca", default=None, help="CA certificate path (.pem)")
+    parser.add_argument("--cert", default=None, help="Client certificate path (.pem)")
+    parser.add_argument("--key", default=None, help="Client private key path (.pem)")
+    parser.add_argument("--no-tls", action="store_true", help="Disable TLS (loopback :1883 dev listener only)")
     args = parser.parse_args()
 
     client = mqtt.Client(
-        client_id=f"mock-radxa-{args.uuid[:8]}",
+        client_id=f"rmms-tap-{args.uuid[:8]}",
         userdata={"uuid": args.uuid},
         protocol=mqtt.MQTTv311,
     )
@@ -271,23 +180,20 @@ def main():
             print("error: --ca, --cert, and --key are required unless --no-tls is set",
                   file=sys.stderr)
             sys.exit(1)
-
         tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=args.ca)
         tls_ctx.load_cert_chain(certfile=args.cert, keyfile=args.key)
         tls_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         client.tls_set_context(tls_ctx)
     else:
-        print("[mock_radxa] WARNING: TLS disabled — for local dev only", flush=True)
+        print("[tap] WARNING: TLS disabled — loopback dev listener only", flush=True)
 
-    print(f"[mock_radxa] connecting to {args.host}:{args.port} "
-          f"for device {args.uuid}", flush=True)
-
+    print(f"[tap] connecting to {args.host}:{args.port} for device {args.uuid}", flush=True)
     client.connect(args.host, args.port, keepalive=60)
 
     try:
         client.loop_forever()
     except KeyboardInterrupt:
-        print("\n[mock_radxa] stopped", flush=True)
+        print("\n[tap] stopped", flush=True)
 
 
 if __name__ == "__main__":

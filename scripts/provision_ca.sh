@@ -23,7 +23,7 @@
 #
 # Outputs:
 #   $OUT_DIR/broker/ca.crt | broker.crt | broker.key | mosquitto.conf | acl
-#   $OUT_DIR/mirror-<id>/ca.crt | cert.pem | key.pem        (PEM, for MMM-MQTT)
+#   $OUT_DIR/mirror-<id>/ca.crt | cert.pem | key.pem        (PEM, for the mirror's MMM-CustomMQTTBridge)
 #   $OUT_DIR/operator-<id>/ca.crt | cert.pem | key.pem      (PEM, for mosquitto_pub)
 #   $OUT_DIR/device-<uuid>/ca.der | dev.crt | dev.key       (DER, for Pico littlefs)
 #   $OUT_DIR/device-<uuid>/dev.crt.pem | dev.key.pem        (PEM, for bake_certs.py)
@@ -269,7 +269,7 @@ echo
 echo "Broker (copy to tablet ~/rmms/ — see install crib):"
 ls -la "$BROKER_OUT"
 echo
-echo "Mirror (copy to MagicMirror²'s MMM-MQTT config):"
+echo "Mirror (copy to MagicMirror²'s MMM-CustomMQTTBridge config):"
 ls -la "$MIRROR_OUT"
 echo
 echo "Operator (PoC: keep on laptop for mosquitto_pub / Radxa publish):"

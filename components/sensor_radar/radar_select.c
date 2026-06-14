@@ -13,8 +13,11 @@
  * Reads /cfg/sensors.json and returns the matching radar_driver_t.
  *
  * For v1, the JSON file is treated as a plain ASCII string for simplicity
- * (only "bha2" is supported), until a JSON parsing integration is added.
- * The string must match exactly (case-sensitive, no trailing whitespace).
+ * ("bha2" or "hmmd"), until a JSON parsing integration is added. The string
+ * must match exactly (case-sensitive, no trailing whitespace).
+ *
+ * Adding a third radar is a new radar_*.c file plus one strcmp branch here —
+ * nothing else (CLAUDE.md §7.4). See ADR-0007 for the HMMD addition.
  *
  * See CLAUDE.md §3.2 and §7.4 for design rationale.
  */
@@ -45,8 +48,12 @@ radar_driver_t *radar_select_from_config(void)
         LOG_I("Radar driver selected: MR60BHA2 (BHA2)");
         return radar_bha2_driver();
     }
+    if (strcmp((const char *)buf, "hmmd") == 0) {
+        LOG_I("Radar driver selected: 24 GHz HMMD");
+        return radar_hmmd_driver();
+    }
 
-    LOG_E("Unknown radar type in config: \"%s\" (expected \"bha2\")",
+    LOG_E("Unknown radar type in config: \"%s\" (expected \"bha2\" or \"hmmd\")",
           (const char *)buf);
     return NULL;
 }
