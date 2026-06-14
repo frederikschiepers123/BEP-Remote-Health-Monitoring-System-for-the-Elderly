@@ -76,13 +76,19 @@ echo "[broker] issuing server cert for CN=$BROKER_HOST, IP=$BROKER_IP"
 openssl ecparam -name prime256v1 -genkey -noout -out "$BROKER_OUT/broker.key"
 chmod 600 "$BROKER_OUT/broker.key"
 
-# SAN must cover both the IP and the hostname so the firmware can connect by
-# either. mbedTLS validates the leaf against the connection target.
+# SAN must cover the hostname AND the loopback/localhost so every client
+# validates the leaf against its connection target:
+#   - DNS:tablet.local  — the firmware (dials by mDNS name; IP-independent)
+#   - DNS:localhost, IP:127.0.0.1 — the tablet's OWN MagicMirror bridge, which
+#     connects to the broker over loopback. These are STABLE, so the bridge
+#     keeps validating across DHCP-lease changes (the prior cert only had the
+#     then-current LAN IP, so the loopback bridge failed hostname check).
+#   - IP:$BROKER_IP — convenience for a laptop connecting by the current LAN IP.
 cat > "$BROKER_OUT/broker.ext" <<EOF
 basicConstraints=CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:$BROKER_HOST,IP:$BROKER_IP
+subjectAltName=DNS:$BROKER_HOST,DNS:localhost,IP:127.0.0.1,IP:$BROKER_IP
 EOF
 
 openssl req -new -key "$BROKER_OUT/broker.key" \
@@ -276,4 +282,4 @@ echo "Identities:"
 echo "  Device UUID:  $DEVICE_UUID"
 echo "  Mirror CN:    $MIRROR_CN"
 echo "  Operator CN:  $OPERATOR_CN"
-echo "  Broker SAN:   DNS:$BROKER_HOST, IP:$BROKER_IP"
+echo "  Broker SAN:   DNS:$BROKER_HOST, DNS:localhost, IP:127.0.0.1, IP:$BROKER_IP"
