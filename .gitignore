@@ -31,6 +31,10 @@ Thumbs.db
 # Node.js — MagicMirror² + module deps
 node_modules/
 
+# MagicMirror runtime config — holds LAN-specific broker IPs/paths (CLAUDE.md
+# §19: never commit LAN addresses). The live config lives on the tablet.
+MagicMirror/config/config.js
+
 # Python (provisioning tooling)
 __pycache__/
 *.pyc
