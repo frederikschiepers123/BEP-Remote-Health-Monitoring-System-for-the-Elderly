@@ -43,9 +43,8 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 
 WIN_HOME="${WIN_HOME:-/mnt/c/Users/frede}"
-MM_DIR="$REPO_DIR/MagicMirror"
-MM_CONFIG="$MM_DIR/config/config.js"
-MM_LOG="${MM_LOG:-/tmp/mm2.log}"
+# (No MM_DIR/MM_CONFIG/MM_LOG: the laptop no longer runs MagicMirror — the
+# tablet does, via Termux:Boot. See step 5.)
 TERMUX_USER="${TERMUX_USER:-u0_a76}"
 TERMUX_PORT="${TERMUX_PORT:-8022}"
 RMMS_DIR="${RMMS_DIR:-/data/data/com.termux/files/home/rmms}"
@@ -121,10 +120,11 @@ else
     " || echo "[demo] WARNING: ssh to tablet failed during presence-bridge start"
 fi
 
-# ── 3. Mirror bridge config (WSL has no mDNS resolver → literal IP) ───────────
-step "pointing MagicMirror bridge at mqtts://$TIP:8883"
-sed -i -E "s|mqtts://[0-9.]+:8883|mqtts://$TIP:8883|" "$MM_CONFIG"
-grep "broker.*mqtts" "$MM_CONFIG"
+# ── 3. (Mirror config) ───────────────────────────────────────────────────────
+# Nothing to do on the laptop: the mirror runs ON THE TABLET, whose
+# MagicMirror talks to the broker over localhost (127.0.0.1) and is brought up
+# by Termux:Boot. We deliberately do NOT rewrite or run a laptop-side mirror
+# (see step 5) — a second mirror would collide on the shared MQTT client id.
 
 # ── 4. Demo device bundle — host-only broker.json (one-time provision) ───────
 DEVDIR="out/device-$DEMO_UUID"
@@ -141,33 +141,37 @@ cp -r "$DEVDIR" "$WIN_HOME/"
 cp scripts/provision_device.py "$WIN_HOME/"
 echo "[demo] copied $DEVDIR + provision_device.py to $WIN_HOME/ (only needed for first-time provision)"
 
-# ── 5. MagicMirror² ──────────────────────────────────────────────────────────
-step "(re)starting MagicMirror²"
-if PID=$(ss -tlnp 2>/dev/null | awk '/:8080/ {match($0, /pid=([0-9]+)/, m); print m[1]; exit}'); then
-    [ -n "$PID" ] && { echo "[demo] killing PID $PID on :8080"; kill "$PID" 2>/dev/null || kill -9 "$PID" 2>/dev/null || true; sleep 1; }
-fi
-( cd "$MM_DIR" && nohup npm run server > "$MM_LOG" 2>&1 & disown )
-sleep 5
-echo "[demo] MagicMirror log (first lines):"
-grep -E "Ready to go|MQTT|Subscribed|ERROR" "$MM_LOG" | tail -10 || tail -10 "$MM_LOG"
+# ── 5. MagicMirror² runs ON THE TABLET (Termux:Boot) — NOT here ───────────────
+# Do not start a laptop-side MagicMirror: it would load the same mirror cert
+# bundle and therefore the same MQTT client id (mirror-<id>) as the tablet's
+# bridge, and the two would kick each other off the broker in a permanent
+# reconnect loop — the tablet tiles go blank. The tablet serves the real
+# mirror (Fully Kiosk) at http://$TIP:8080; open that URL in a laptop browser
+# only if you want to PEEK (read-only over the broker is fine; it uses an
+# auto client id, not the mirror's).
+step "MagicMirror² runs on the tablet (Termux:Boot) — not started on the laptop"
+echo "[demo] tablet mirror (real display): http://$TIP:8080"
 
 # ── 6. What's left ───────────────────────────────────────────────────────────
 cat <<EOM
 
-[demo] laptop side done.
+[demo] laptop side done (broker cert refreshed + pushed). The tablet runs the
+broker, mDNS responder, and MagicMirror itself (Termux:Boot), so usually you
+only need this script after a broker-cert refresh.
+
+The mirror is on the TABLET: http://$TIP:8080 (its Fully Kiosk is the display).
+Open that URL in a laptop browser only to peek.
 
 If the demo Pico is ALREADY provisioned with the host-only broker.json
-(tablet.local), you are done — just power the Pico and open
-http://localhost:8080. It resolves the broker by name; no reflash, no
+(tablet.local), just power it — it resolves the broker by name; no reflash, no
 re-provision, even though the IP changed.
 
 FIRST-TIME ONLY (or after a device wipe), from Windows PowerShell:
     cd C:\\Users\\frede
     # flash bringup_provision.uf2 via BOOTSEL, then:
     py -3.13 provision_device.py COM<N> device-$DEMO_UUID
-    # then flash bringup_sensors_slow.uf2
+    # then flash bringup_sensors.uf2
 
-Keep the tablet screen ON (Android suppresses multicast with the screen off).
-Watch the bridge connect: tail -f $MM_LOG
+Keep the tablet awake (Android suppresses multicast with the screen off).
 
 EOM

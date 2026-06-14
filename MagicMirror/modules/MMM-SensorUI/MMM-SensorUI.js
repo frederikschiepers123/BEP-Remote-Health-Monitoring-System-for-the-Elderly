@@ -238,20 +238,26 @@ Module.register("MMM-SensorUI", {
     const infoText = document.createElement("div");
     infoText.className = "infoText";
 
-    /* Footer content (supervisor feedback): always show WHEN the last sensor
-     * reading was received; an operator info message (if any) is shown above
-     * it.  A frozen timestamp = the device stopped publishing. */
-    const lastReadingLine = this.lastReadingAt
-      ? "Last reading: " + this.lastReadingAt.toLocaleTimeString()
-      : "Waiting for sensor data…";
+    /* Footer content: TWO separate "last stable reading" timestamps — one for
+     * vitals (heart/breath), one for environmentals (temp/humidity/air) —
+     * since the two come from different sensors at different rates and either
+     * can go silent independently. A frozen vitals stamp with a live env stamp
+     * means the radar stopped while the environment sensors kept publishing.
+     * An operator info message (if any) is shown above. */
+    const vitalsLine = this.lastVitalAt
+      ? "Vitals updated: " + this.lastVitalAt.toLocaleTimeString()
+      : "Vitals updated: waiting…";
+    const envLine = this.lastEnvAt
+      ? "Environment updated: " + this.lastEnvAt.toLocaleTimeString()
+      : "Environment updated: waiting…";
+    const stampBlock =
+      '<span style="font-size:0.75em;opacity:0.7;">' +
+      vitalsLine + "<br>" + envLine + "</span>";
 
     if (this.infoMessage) {
-      infoText.innerHTML =
-        this.infoMessage +
-        '<br><span style="font-size:0.75em;opacity:0.7;">' +
-        lastReadingLine + "</span>";
+      infoText.innerHTML = this.infoMessage + "<br>" + stampBlock;
     } else {
-      infoText.innerHTML = lastReadingLine;
+      infoText.innerHTML = stampBlock;
     }
 
     infoWrapper.appendChild(infoIcon);
@@ -278,16 +284,22 @@ notificationReceived: function(notification, payload, sender) {
 
           console.log("SensorUI received:", payload);
 
-          /* Any actual sensor reading (vitals or environment) refreshes the
-           * footer timestamp.  Operator messages, the broker status, and
-           * EMPTY values (vital clears sent when nobody is present) are not
-           * readings — they must not mask a silent device. */
-          if (payload.topic &&
-              payload.topic.indexOf("sensors/") === 0 &&
-              payload.topic !== "sensors/infomessage" &&
-              payload.topic !== "sensors/status" &&
-              payload.message !== "") {
-              this.lastReadingAt = new Date();
+          /* Refresh the per-category "last stable reading" timestamp. A
+           * non-empty value here is already a stable/filtered reading from the
+           * firmware (empty = a clear sent when nobody is present), so the
+           * stamp freezes exactly when that category goes silent. Vitals and
+           * environmentals are tracked separately (two footer lines). */
+          if (payload.message !== "") {
+              if (payload.topic === "sensors/heartrate" ||
+                  payload.topic === "sensors/respiratoryrate") {
+                  this.lastVitalAt = new Date();
+              } else if (payload.topic === "sensors/temperature" ||
+                         payload.topic === "sensors/humidity" ||
+                         payload.topic === "sensors/airquality" ||
+                         payload.topic === "sensors/co2" ||
+                         payload.topic === "sensors/tvoc") {
+                  this.lastEnvAt = new Date();
+              }
           }
 
           // Example topic handling
