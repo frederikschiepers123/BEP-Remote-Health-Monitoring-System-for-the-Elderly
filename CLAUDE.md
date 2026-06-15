@@ -195,12 +195,19 @@ v-table (§7.4), selected by `/cfg/sensors.json` `"radar"` (config flag, not
 runtime UART probing):
 - `"bha2"` — Seeed MR60BHA2 (60 GHz, heart + breath + breath-phase), the
   **advanced** module's radar and what this project demos.
-- `"hmmd"` — Seeed 24 GHz HMMD micro-motion module, the **generic** module's
-  radar (ADR-0001, ADR-0007). Adding it was a new `radar_*.c` file plus one
-  line in `radar_select.c` — no change to the task, topics, or payload schema,
-  exactly as the seam promises. Reports presence + respiration (+ distance);
-  it has no breath-phase stream, so `resp_motion` degrades to `null`
-  (graceful), and it often reports no heart rate (`heart_bpm` → `null`, §9.2.2).
+- `"hmmd"` — Waveshare HMMD 24 GHz module (report mode), the **generic**
+  module's radar (ADR-0001, ADR-0007). Adding it was a new `radar_*.c` file plus
+  one line in `radar_select.c` — no change to the task, topics, or payload
+  schema, exactly as the seam promises. It is a **presence + distance + motion**
+  radar with **no respiration or heart rate** and no breath-phase signal, so the
+  driver always emits `breath_bpm`/`heart_bpm` as `0` (→ `null`, §9.2.2) and
+  `resp_motion` as `null` (graceful degradation — radar_driver.h documents this
+  for "a radar with no phase stream"). On an HMMD module the mirror's
+  heart/breath tiles have no data; presence + distance (ADL / presence
+  monitoring, the generic module's job) work fully. Protocol per the previous
+  group's reference driver (CLAUDE.md §18): `F4 F3 F2 F1` header, LE length,
+  payload `presence(1) + distance(2) + 16×gate-energy(2)`, `F8 F7 F6 F5` tail,
+  no checksum.
 
 A third radar is again a new `radar_*.c` plus one `radar_select.c` branch — a
 DFRobot C1001 (a different 24 GHz module, unrelated to the HMMD) driver is **in
@@ -312,7 +319,7 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   │   │                         #   temp/hum for TEMP_IN/RH_IN compensation)
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
 │   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (60 GHz, SOF-0x01 framing)
-│   │   ├── radar_hmmd.c          # Seeed 24 GHz HMMD driver (0x53 0x59…0x54 0x43, ADR-0007)
+│   │   ├── radar_hmmd.c          # Waveshare HMMD 24 GHz driver (F4F3F2F1 report mode, ADR-0007)
 │   │   └── radar_select.c        # Reads /cfg/sensors.json, returns the driver
 │   ├── sensor_light/             # BH1750 (I²C lux) driver + light_task
 │   ├── cfg/                      # /cfg/{wifi,broker,sensors}.json loaders
@@ -1273,9 +1280,11 @@ Resolve each, then strip the TODO.
 2. ~~**Radar framing parity.**~~ **Resolved.** Bench bring-up of a live
    MR60BHA2 confirmed it does NOT use Andar `0x53 0x59` / `0x54 0x43` framing.
    It uses its own 8-byte SOF-`0x01` header with `~XOR` checksums; see §3.2.
-   The second radar, the 24 GHz HMMD module (`radar_hmmd.c`, ADR-0007), *does*
-   use that `0x53 0x59 … 0x54 0x43` framing — the two are distinct protocols
-   behind the one v-table, which is exactly why the parity question mattered.
+   The second radar, the Waveshare HMMD module (`radar_hmmd.c`, ADR-0007), uses
+   a *third*, different framing — `F4 F3 F2 F1` header / `F8 F7 F6 F5` tail,
+   little-endian length, no checksum (per the previous group's reference driver,
+   §18). Three radars, three protocols, one v-table — exactly why the framing
+   question mattered.
 3. ~~**Tablet bridge ownership.**~~ **Moot for v1.** The `/dev/ttyACMx ↔
    localhost:8883` byte pipe only exists for the USB-CDC transport, which is
    out of scope for v1 (§2.1). If USB-CDC is revived post-v1, the bridge (a
@@ -1335,13 +1344,15 @@ Resolve each, then strip the TODO.
   USB-CDC-era custom `stream_t` stack (`transport_usb`, `transport_selector`,
   `tls_context`, `mqtt_client`, `transport_wifi`) was **deleted**; its design
   lives in ADR-0002. Reviving USB-CDC is a post-v1 ADR (§2.1, §2.2, §8.1, §17).
-- **Second radar driver — 24 GHz HMMD (ADR-0007):** v1 now ships **two** radar
-  drivers behind the `radar_driver_t` v-table, selected by `/cfg/sensors.json`
-  `"radar"`: `"bha2"` (Seeed MR60BHA2, advanced module) and `"hmmd"` (Seeed
-  24 GHz HMMD micro-motion, the generic module's radar per ADR-0001). New file
+- **Second radar driver — Waveshare HMMD 24 GHz (ADR-0007):** v1 now ships
+  **two** radar drivers behind the `radar_driver_t` v-table, selected by
+  `/cfg/sensors.json` `"radar"`: `"bha2"` (Seeed MR60BHA2, advanced module) and
+  `"hmmd"` (Waveshare HMMD report-mode, the generic module's radar per ADR-0001
+  — presence + distance + motion only, no respiration/heart). New file
   `components/sensor_radar/radar_hmmd.c` + one `radar_select.c` branch + one
   `CfgRadarKind` value — no change to the task, the `rmms/<uuid>/radar` topic,
-  or the §9.2 schema, exactly as the seam promises (§3.2, §7.4).
+  or the §9.2 schema, exactly as the seam promises (§3.2, §7.4). Protocol taken
+  from the previous group's working driver (§18).
 - **DFRobot C1001 radar — in development:** a *different* 24 GHz module
   (unrelated to the HMMD) is being added as a third driver behind the v-table.
   The `radar_driver_t` v-table carries the MR60BHA2 + HMMD pair today; the C1001

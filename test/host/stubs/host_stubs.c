@@ -48,6 +48,7 @@ unsigned uart_init(uart_inst_t *u, unsigned baud) { (void)u; (void)baud; return 
 void uart_set_format(uart_inst_t *u, unsigned d, unsigned s, int p) { (void)u; (void)d; (void)s; (void)p; }
 void uart_set_fifo_enabled(uart_inst_t *u, bool e) { (void)u; (void)e; }
 void uart_deinit(uart_inst_t *u) { (void)u; }
+void uart_write_blocking(uart_inst_t *u, const uint8_t *src, size_t len) { (void)u; (void)src; (void)len; }
 
 static const uint8_t *s_uart_buf = NULL;
 static size_t s_uart_len = 0, s_uart_pos = 0;

@@ -30,8 +30,9 @@
 #define BOARD_OLED_ADDR         0x3CU   /* SA0 low; 0x3D if SA0 high */
 #define BOARD_BH1750_ADDR       0x23U   /* default; 0x5C if ADDR pin pulled high */
 
-/* ── UART1 — mmWave radar (shared UART for MR60BHA2 OR C1001; selection
- *           via /cfg/sensors.json per §3.2 / §7.4) ─────────────────────── */
+/* ── UART1 — mmWave radar (shared UART for the MR60BHA2 OR the 24 GHz HMMD
+ *           module; selection via /cfg/sensors.json per §3.2 / §7.4 /
+ *           ADR-0007 — the HMMD variant reuses this UART, no new pins) ──── */
 /* GP4/GP5 are UART1 on RP2350. The hardware perspective: MCU TX = GP5,
  * MCU RX = GP4. */
 #define BOARD_RADAR_UART_INST   uart1

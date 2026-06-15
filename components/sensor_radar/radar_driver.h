@@ -6,7 +6,7 @@
  * Two radars sit behind this common vtable, selected by the "radar" flag in
  * /cfg/sensors.json (not by runtime UART probing):
  *   - "bha2": Seeed MR60BHA2 (60 GHz, heart + breath + breath-phase)
- *   - "hmmd": Seeed 24 GHz HMMD micro-motion module (ADR-0007)
+ *   - "hmmd": Waveshare HMMD 24 GHz presence/distance module (ADR-0007)
  * Both produce the same RadarSample; radar_task and the §9.2 wire schema are
  * unaware of which is attached.  The vtable is the extensibility seam for any
  * further radar: a new radar_*.c file plus one line in radar_select.c.

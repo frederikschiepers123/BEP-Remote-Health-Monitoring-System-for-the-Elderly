@@ -38,7 +38,7 @@ typedef struct {
 typedef enum {
     CFG_RADAR_NONE  = 0,
     CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz heart + breath */
-    CFG_RADAR_HMMD,     /* Seeed 24 GHz HMMD micro-motion module (ADR-0007) */
+    CFG_RADAR_HMMD,     /* Waveshare HMMD 24 GHz presence/distance module (ADR-0007) */
 } CfgRadarKind;
 
 /* Environmental-sensor selection. The PCB exposes a single I²C footprint

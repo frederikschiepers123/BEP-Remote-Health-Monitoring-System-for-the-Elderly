@@ -171,26 +171,31 @@ The plausibility/median/breath-hold post-processing on top of the driver is
 
 ### Step 7b — HMMD radar variant + selection (generic module, ADR-0007)
 
-**Goal:** the same firmware drives the 24 GHz HMMD module with no rebuild —
-just a config flag. Only relevant on a board populated with the HMMD part.
+**Goal:** the same firmware drives the Waveshare HMMD (24 GHz) module with no
+rebuild — just a config flag. Only relevant on a board populated with the HMMD
+part. Protocol is the previous group's reference driver
+(`bestanden_vorige_BAP/.../lib/hmmd_mpy.py`, CLAUDE.md §18): `F4 F3 F2 F1`
+header, LE length, `presence + distance + 16 gate energies`, `F8 F7 F6 F5` tail,
+no checksum. `init` sends the Report-Mode command first.
 
 - Set `/cfg/sensors.json` `"radar": "hmmd"`; power-cycle.
 - On boot the log shows `Radar driver selected: 24 GHz HMMD` and
-  `init OK … (HMMD protocol)` — confirms `radar_select_from_config()` picked the
-  right driver with no code change (same `RadarSample` → same `rmms/<uuid>/radar`).
-- Wave/sit in front of the radar; `presence=true`; `breath_bpm` plausible.
+  `init OK … (HMMD report-mode protocol)` — confirms `radar_select_from_config()`
+  picked the right driver with no code change (same `RadarSample` → same
+  `rmms/<uuid>/radar`).
+- Wave/sit in front of the radar; `presence=true`, `distance_mm` tracks range.
 
 **Pass:**
 - Correct driver name in the startup `LOG_I`; `"bha2"` vs `"hmmd"` swaps drivers
   with no rebuild.
-- `resp_motion` is `null` on the wire (HMMD has no breath-phase stream — graceful
-  degradation, ADR-0007); `heart_bpm` may be `null` if this module variant does
-  not report it.
-- **TODO(spec):** the HMMD `(CTRL, CMD)` report codes in `radar_hmmd.c` are
-  firmware-revision-dependent — confirm them against the live module's datasheet
-  /UART dump and strip the marker (same step the MR60BHA2 went through for §3.2).
-  The frame envelope (`0x53 0x59 … 0x54 0x43`, sum checksum) is already
-  host-tested (`test/host/test_radar_hmmd.c`).
+- `presence` and `distance_mm` are live. `heart_bpm`, `breath_bpm`, and
+  `resp_motion` are **always `null`** — the HMMD has no respiration/heart
+  sensing (graceful degradation, ADR-0007), not a fault.
+- **TODO(spec):** confirm the distance **unit** against a tape measure — the
+  reference used a 0.7 m gate factor, the driver assumes cm→mm
+  (`HMMD_DIST_MM_PER_RAW`); adjust and strip the marker. The frame envelope
+  (`F4 F3 F2 F1 … F8 F7 F6 F5`) is already host-tested
+  (`test/host/test_radar_hmmd.c`).
 
 ---
 

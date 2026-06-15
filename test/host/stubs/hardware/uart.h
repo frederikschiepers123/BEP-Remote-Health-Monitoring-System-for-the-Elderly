@@ -4,16 +4,18 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct uart_inst { int dummy; } uart_inst_t;
 
 #define UART_PARITY_NONE 0
 
-/* Prototypes — bodies supplied by the test file. */
+/* Prototypes — bodies supplied by host_stubs.c. */
 unsigned uart_init(uart_inst_t *uart, unsigned baud);
 void     uart_set_format(uart_inst_t *uart, unsigned data, unsigned stop, int parity);
 void     uart_set_fifo_enabled(uart_inst_t *uart, bool enabled);
 void     uart_deinit(uart_inst_t *uart);
+void     uart_write_blocking(uart_inst_t *uart, const uint8_t *src, size_t len);
 bool     uart_is_readable(uart_inst_t *uart);
 char     uart_getc(uart_inst_t *uart);
 
