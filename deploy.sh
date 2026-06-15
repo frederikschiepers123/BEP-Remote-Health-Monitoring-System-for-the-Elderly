@@ -36,6 +36,7 @@ sleep 5
 echo "Updating Termux packages..."
 
 pkg update -y
+pkg upgrade -y
 
 echo "Installing required packages..."
 
