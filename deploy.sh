@@ -49,7 +49,7 @@ pkg install -y \
 ########################################
 
 echo ""
-echo "Installing MagicMirror dependencies..."
+echo "Installing MagicMirror dependencies...(might take several minutes)"
 
 cd MagicMirror
 
