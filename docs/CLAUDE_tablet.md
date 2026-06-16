@@ -280,20 +280,46 @@ Keep the tablet mains-powered and never let the display sleep (the mirror UI
 
 ## 8. Installation / deployment
 
-Driven from the workstation by the tablet phase of
-`scripts/deploy_home_kit.sh tablet <home-id> <tablet-ip>`, which: copies broker
-certs + `mosquitto.conf` + `acl` to `~/rmms/`, copies the mirror bundle, installs
-`tablet_boot.sh` as the Termux:Boot hook, renders `config.js`, optionally runs a
-one-time Termux bootstrap (`pkg install` of openssh/mosquitto/python/nodejs +
-`python-zeroconf`/`paho-mqtt`), and starts everything.
+Provisioning a **new tablet** is two steps — one on the tablet, one on the
+laptop — because the project CA private key never touches the tablet (root
+`CLAUDE.md §10.2`), so certs are minted on the laptop and pushed in.
 
-For a quick demo session, `scripts/demo_start.sh <tablet-ip>` re-mints the broker
-cert for today's IP, (re)starts the mDNS responder + presence bridge, and relies
-on the tablet's own Termux:Boot to keep mosquitto and MagicMirror up. SSH bootstrap
-is one-time via `scripts/setup_tablet_ssh.sh <tablet-ip>`.
+**Step 1 — on the tablet (once):** clone the repo in Termux and run the
+on-device installer `./deploy.sh` (repo root). It is idempotent and installs
+everything that can be done on-device: Termux packages (git, nodejs, mosquitto,
+openssh, python, termux-api) + `pip install paho-mqtt zeroconf`, MagicMirror²
+(`npm install` + `install-mm` + the MMM-CustomMQTTBridge `mqtt` dep), wires the
+repo's `tablet_*` scripts into `~/rmms`, installs `tablet_boot.sh` as the
+Termux:Boot hook (`~/.termux/boot/10-rmms`), starts `sshd`, copies the Fully
+Kiosk config + screen-control APK into `~/storage/downloads`, and brings the
+services up. It does **not** mint or hold certs.
+
+**Step 2 — on the laptop (once):** deliver the mTLS identity over the sshd that
+`deploy.sh` started:
+
+```
+scripts/setup_tablet_ssh.sh        <tablet-ip>        # copy laptop SSH key
+scripts/deploy_home_kit.sh tablet  <home-id> <tablet-ip>
+```
+
+The tablet phase of `deploy_home_kit.sh` copies broker certs + `mosquitto.conf`
++ `acl` to `~/rmms/`, copies the mirror bundle, renders `config.js`, and
+restarts the tier. Until it runs, MagicMirror loads but mosquitto stays down
+(no certs) and there is no live data — by design.
+
+For a quick demo session on an already-provisioned tablet,
+`scripts/demo_start.sh <tablet-ip>` re-mints the broker cert for today's IP,
+(re)starts the mDNS responder + presence bridge, and relies on the tablet's own
+Termux:Boot to keep mosquitto and MagicMirror up.
+
+> `deploy.sh` supersedes the older single-shot `boot/start_magicmirror.sh` as
+> the boot entry point; the canonical autostart is `scripts/tablet_boot.sh`
+> (§7), and MagicMirror is launched/supervised by
+> `scripts/tablet_start_magicmirror.sh` (which opens the Fully Kiosk viewer).
 
 **Manual steps** (see §7): battery-opt off, Termux:Boot + add-ons from F-Droid,
-unlock once after boot.
+unlock once after boot; import the Fully Kiosk config and install the APK when
+Android prompts.
 
 ---
 
