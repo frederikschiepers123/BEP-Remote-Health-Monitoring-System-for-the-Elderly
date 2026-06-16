@@ -84,7 +84,8 @@ sleep 5
 echo "Updating Termux packages..."
 
 pkg update -y
-pkg upgrade -y
+# Non-fatal: a partial upgrade must not abort the whole deploy (esp. on re-runs).
+pkg upgrade -y || echo "WARNING: 'pkg upgrade' had errors — continuing."
 
 echo "Installing required packages..."
 
@@ -134,9 +135,16 @@ npm install mqtt
 
 cd "$REPO_DIR"
 
-# The tablet runtime scripts expect MagicMirror at ~/MagicMirror; point that at
-# this clone so a fixed boot path works regardless of the clone directory name.
-ln -sfn "$REPO_DIR/MagicMirror" "$HOME/MagicMirror"
+# The tablet runtime scripts launch MagicMirror from ~/MagicMirror; point that
+# at this clone so the boot path is independent of the clone directory name.
+# Guard: never clobber a pre-existing real install — only (re)create the symlink
+# when ~/MagicMirror is absent or already a symlink.
+if [ -e "$HOME/MagicMirror" ] && [ ! -L "$HOME/MagicMirror" ]; then
+    echo "note: ~/MagicMirror already exists as a real directory — leaving it in"
+    echo "      place; MagicMirror will run from there, not from this clone."
+else
+    ln -sfn "$REPO_DIR/MagicMirror" "$HOME/MagicMirror"
+fi
 
 ########################################
 # Wire tablet runtime scripts + self-healing autostart
