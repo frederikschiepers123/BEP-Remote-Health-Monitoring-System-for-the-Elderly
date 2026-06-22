@@ -233,6 +233,9 @@ static volatile bool     s_disp_env_have = false;
 static volatile uint16_t s_disp_co2 = 0, s_disp_tvoc = 0;
 static volatile uint8_t  s_disp_aqi = 0, s_disp_air_q = 3;
 static volatile bool     s_disp_air_have = false;
+static volatile float    s_disp_lux = 0.0f;
+static volatile bool     s_disp_light_have = false;
+static volatile uint8_t  s_disp_light_q = 3;
 #endif
 
 static void mqtt_pub_status_cb(void *arg, err_t result)
@@ -525,6 +528,11 @@ static void publish_light_sample(void)
         q = 3;
         s.lux = 0.0f;
     }
+#if OLED_ON
+    s_disp_lux        = s.lux;
+    s_disp_light_q    = q;
+    s_disp_light_have = (q != 3);
+#endif
 
     char payload[200];
     int pn = light_sample_encode(payload, sizeof(payload),
@@ -851,9 +859,12 @@ static const char *aqi_str(uint8_t aqi)
     }
 }
 
+/* Troubleshooting pages: net, env, air, build, radar, light, io. */
+#define N_OLED_PAGES 7U
+
 static void oled_page_indicator(uint8_t n)
 {
-    char line[8]; snprintf(line, sizeof(line), "%u/4", (unsigned)n);
+    char line[8]; snprintf(line, sizeof(line), "%u/%u", (unsigned)n, (unsigned)N_OLED_PAGES);
     sh1122_draw_text(&s_oled, 240, 56, 1, line);
 }
 
@@ -939,6 +950,73 @@ static void render_page_build(void)
     oled_page_indicator(4);
 }
 
+static void render_page_radar(void)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "RADAR /radar");
+    char line[40];
+    if (!s_radar_ok) {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "INIT FAILED");
+    } else if (!s_disp_radar_have) {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "WAITING FOR FRAME");
+    } else {
+        char hr[12], br[12];
+        if (s_disp_heart  > 0.0f) snprintf(hr, sizeof(hr), "%4.1f", (double)s_disp_heart);
+        else                      snprintf(hr, sizeof(hr), "--");
+        if (s_disp_breath > 0.0f) snprintf(br, sizeof(br), "%4.1f", (double)s_disp_breath);
+        else                      snprintf(br, sizeof(br), "--");
+        snprintf(line, sizeof(line), "PRES %s D %lu MM",
+                 s_disp_radar_pres ? "Y" : "N", (unsigned long)s_disp_dist_mm);
+        sh1122_draw_text(&s_oled, 0, 18, 2, line);
+        snprintf(line, sizeof(line), "HR %s BR %s", hr, br);
+        sh1122_draw_text(&s_oled, 0, 36, 2, line);
+        snprintf(line, sizeof(line), "Q%u  FRAMES %lu",
+                 (unsigned)s_disp_radar_q, (unsigned long)s_radar_seq);
+        sh1122_draw_text(&s_oled, 0, 52, 1, line);
+    }
+    oled_page_indicator(5);
+}
+
+static void render_page_light(void)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "LIGHT /light");
+    char line[40];
+    if (!s_light_ok) {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "INIT FAILED");
+    } else if (!s_disp_light_have) {
+        sh1122_draw_text(&s_oled, 0, 18, 2, "WAITING FOR SAMPLE");
+    } else {
+        snprintf(line, sizeof(line), "%7.1f LUX", (double)s_disp_lux);
+        sh1122_draw_text(&s_oled, 0, 18, 2, line);
+        snprintf(line, sizeof(line), "SEQ %lu  Q%u",
+                 (unsigned long)s_light_seq, (unsigned)s_disp_light_q);
+        sh1122_draw_text(&s_oled, 0, 40, 1, line);
+    }
+    oled_page_indicator(6);
+}
+
+/* IO + device-health page — the PCB bring-up page: per-sensor init result,
+ * plus live SW2 button and PWR/WIFI LED pin states (read back from the pads). */
+static void render_page_io(void)
+{
+    sh1122_clear(&s_oled);
+    sh1122_draw_text(&s_oled, 0, 0, 2, "IO + HEALTH");
+    char line[40];
+    snprintf(line, sizeof(line), "ENV %s AIR %s",
+             s_env_ok ? "OK" : "--", s_ens_ok ? "OK" : "--");
+    sh1122_draw_text(&s_oled, 0, 18, 2, line);
+    snprintf(line, sizeof(line), "LGT %s RADAR %s",
+             s_light_ok ? "OK" : "--", s_radar_ok ? "OK" : "--");
+    sh1122_draw_text(&s_oled, 0, 36, 2, line);
+    snprintf(line, sizeof(line), "BTN %s PWR %d WIFI %d",
+             gpio_get(BOARD_BTN_DISPLAY_PIN) ? "UP" : "DN",
+             (int)gpio_get(BOARD_LED_POWER_PIN),
+             (int)gpio_get(BOARD_LED_WIFI_PIN));
+    sh1122_draw_text(&s_oled, 0, 52, 1, line);
+    oled_page_indicator(7);
+}
+
 /* SW2 display-cycle button: GPIO16, external 1 kΩ pull-up, active-low.
  * Debounce by sampling at the ~3 Hz render cadence and requiring two
  * consecutive low reads (~300 ms apart) before counting an edge — well
@@ -973,11 +1051,11 @@ static void render_task(void *arg)
         /* SW2 short-press: advance page immediately + reset the auto-cycle
          * dwell so a tap doesn't get immediately overridden. */
         if (sw_disp_pressed_edge()) {
-            page = (uint8_t)((page + 1) & 0x03U);
+            page = (uint8_t)((page + 1) % N_OLED_PAGES);
             last_cycle = now;
             printf("[bringup] SW2 → page %u\n", (unsigned)page);
         } else if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
-            page = (page + 1) & 0x03U;
+            page = (uint8_t)((page + 1) % N_OLED_PAGES);
             last_cycle = now;
         }
         uint32_t uptime_s = (uint32_t)((now - boot_tick) / configTICK_RATE_HZ);
@@ -987,6 +1065,9 @@ static void render_task(void *arg)
         case 1: render_page_env(s_env_seq); break;
         case 2: render_page_air(s_air_seq); break;
         case 3: render_page_build(); break;
+        case 4: render_page_radar(); break;
+        case 5: render_page_light(); break;
+        case 6: render_page_io(); break;
         default: render_page_net(uptime_s); break;
         }
         /* sh1122_clear/draw_text operate on the in-RAM framebuffer (no I²C).
@@ -1079,7 +1160,7 @@ static void sensors_task(void *arg)
      * driver names itself, so the log line works for either. */
     s_env = env_select_from_config();
     uint8_t env_addr = (s_env == env_aht21_driver())
-                           ? BOARD_AHT21_ADDR : BOARD_BME280_ADDR;
+                           ? BOARD_AHT21_ADDR : BOARD_BMP280_ADDR;
     err_t e = s_env ? s_env->init(s_env->ctx, BOARD_I2C_INST, env_addr)
                     : ERR_FAIL;
     s_env_ok = (e == ERR_OK);
