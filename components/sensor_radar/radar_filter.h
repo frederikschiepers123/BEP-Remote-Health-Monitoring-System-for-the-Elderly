@@ -78,8 +78,8 @@
 /* ── Tunables (from the supervisor's reference, cm → mm; HIL deviations are
  *    noted inline — vital timeouts and the estimate window/min-samples) ───── */
 
-#define RADAR_FILT_PRESENCE_CONFIRM_MS 4000U  /* evidence needed before "present" */
-#define RADAR_FILT_ABSENCE_CONFIRM_MS  4000U  /* silence needed before "absent"   */
+#define RADAR_FILT_PRESENCE_CONFIRM_MS 10000U /* evidence needed before "present" */
+#define RADAR_FILT_ABSENCE_CONFIRM_MS  8000U  /* silence needed before "absent"   */
 
 #define RADAR_FILT_DIST_MIN_MM         350.0f
 #define RADAR_FILT_DIST_MAX_MM         1500.0f
@@ -101,7 +101,7 @@
  * estimate never completed.  Timeouts raised to bridge the typical burst:
  * with the driver's 5 s latch (RADAR_STALE_MS) the effective hold is ~20 s
  * (heart) / ~25 s (breath).  Safe against stale-after-departure — presence
- * gating force-resets both vitals within ABSENCE_CONFIRM_MS (4 s) of the
+ * gating force-resets both vitals within ABSENCE_CONFIRM_MS (8 s) of the
  * subject leaving, so the longer timeout only extends holds WHILE present. */
 #define RADAR_FILT_HEART_TIMEOUT_MS    15000U
 
@@ -112,14 +112,10 @@
 #define RADAR_FILT_BREATH_TAU_MS       15000.0f
 #define RADAR_FILT_BREATH_TIMEOUT_MS   20000U   /* see HEART_TIMEOUT note above */
 
-/* Bench calibration: the MR60BHA2's HEART rate reads high (supervisor's
- * reference subtracts 20 BPM at output).  Set to 0.0f to disable. */
+/* Bench calibration: the MR60BHA2 reads high (supervisor's reference
+ * subtracts 20 BPM / 2 RPM at output).  Set to 0.0f to disable. */
 #define RADAR_HEART_CAL_OFFSET_BPM     20.0f
-/* BREATH is no longer the radar's biased 0x0A14 BR — it is our own phase-
- * waveform estimate (breath_freq.c, ADR-0008), which is unbiased
- * (bench: 12.07 RPM at a true 12), so NO offset is applied.  The former 2.0f
- * corrected the radar's BR and must not be reused on the estimator. */
-#define RADAR_BREATH_CAL_OFFSET_RPM    0.0f
+#define RADAR_BREATH_CAL_OFFSET_RPM    2.0f
 
 /* LIVE display path: rolling robust median (requirement 2026-06-12: a stable,
  * UPDATING vital on the mirror at least every 10 s while someone is present).

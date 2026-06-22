@@ -3,7 +3,6 @@
 
 #include "radar_driver.h"
 #include "board_pico2wh.h"
-#include "breath_freq.h"
 #include "err.h"
 
 /* These resolve to the pico-sdk / FreeRTOS kernel on target, and to the
@@ -73,30 +72,16 @@
  * after this many ms without an update. */
 #define RADAR_STALE_MS    5000U
 
-/* Breath-phase ring (ADR-0006 + the breath_freq.c rate estimator).  The module
- * streams the 0x0A13 phase frame at several Hz; we keep a rolling history of the
- * BREATH phase serving TWO consumers:
- *   - amplitude (peak-to-peak over the last AMP_WIN_MS) → breath-hold detection;
- *   - rate (Goertzel over the last BREATH_FREQ_WIN_MS in breath_freq.c) → the
- *     published breath_rpm, replacing the radar's own 0x0A14 BR which
- *     over-reports at slow breathing.
- * The ring is time-bounded to KEEP_MS (>= BREATH_FREQ_WIN_MS) by phase_push;
- * each consumer sub-selects its own shorter window. */
-#define BHA2_AMP_WIN_MS        6000U  /* amplitude window (one slow breath cycle) */
-#define BHA2_PHASE_KEEP_MS     32000U /* ring retention; >= BREATH_FREQ_WIN_MS    */
-#define BHA2_PHASE_CAP         384U   /* holds KEEP_MS up to ~12 Hz phase rate    */
-#define BHA2_PHASE_MIN_N       8U     /* fewer samples ⇒ amplitude not trusted   */
-#define BHA2_PHASE_FRESH_MS    1500U  /* newest sample older than this ⇒ invalid  */
-#define BHA2_PHASE_MIN_SPAN_MS 4000U  /* amplitude window must span this          */
-
-/* TEMP capture for breath-algorithm design (remove after): when 1, emit
- * parseable "CAP," CSV lines on the dev console for every breath-phase,
- * raw-BPM, and distance frame, so scripts/analyze_breath.py can compare
- * candidate frequency estimators against the radar's own BPM offline.
- *   CAP,P,<t_ms>,<total>,<breath>,<heart>   — phase waveform (native cadence)
- *   CAP,B,<t_ms>,<raw_bpm>                   — radar's breath rate
- *   CAP,D,<t_ms>,<distance_mm>               — valid distance reading        */
-#define BHA2_CAPTURE 1
+/* Breath-phase amplitude window (ADR-0006).  The module streams the 0x0A13
+ * phase frame several Hz; we keep a rolling window of the BREATH phase and
+ * report its peak-to-peak amplitude so the filter can tell chest motion from a
+ * breath-hold.  The window must span at least one slow breath cycle (~6 s at
+ * 10 RPM) or a slow breath's own swing would read as "no motion". */
+#define BHA2_PHASE_WIN_MS      6000U  /* rolling amplitude window               */
+#define BHA2_PHASE_CAP         96U    /* ring capacity (covers 6 s up to ~16 Hz) */
+#define BHA2_PHASE_MIN_N       8U     /* fewer samples ⇒ amplitude not trusted  */
+#define BHA2_PHASE_FRESH_MS    1500U  /* newest sample older than this ⇒ invalid */
+#define BHA2_PHASE_MIN_SPAN_MS 4000U  /* window must span this before judging    */
 
 /* ── Driver context ──────────────────────────────────────────────────────── */
 
@@ -115,17 +100,11 @@ typedef struct {
     uint32_t human_flag_at_ms;
     uint32_t last_any_frame_at_ms;
 
-    /* Rolling window of breath-phase samples (amplitude + rate estimate). */
+    /* Rolling window of breath-phase samples for amplitude (ADR-0006). */
     float    phase_val[BHA2_PHASE_CAP];
     uint32_t phase_at_ms[BHA2_PHASE_CAP];
-    uint16_t phase_head;     /* index of oldest entry (cap > 255 ⇒ 16-bit) */
-    uint16_t phase_count;
-
-    /* Phase-derived breath rate (breath_freq.c) — the published breath_rpm. */
-    float    last_freq_rpm;
-    bool     last_freq_valid;
-    uint32_t last_freq_at_ms;  /* time of the last VALID estimate (staleness)  */
-    uint32_t last_est_ms;      /* throttle: re-estimate at most ~2 Hz          */
+    uint8_t  phase_head;     /* index of oldest entry */
+    uint8_t  phase_count;
 } Bha2Ctx;
 
 static Bha2Ctx s_bha2_ctx;
@@ -189,58 +168,45 @@ static void phase_reset(Bha2Ctx *c) {
 static void phase_push(Bha2Ctx *c, float v, uint32_t t) {
     if (!isfinite(v)) return;
     if (c->phase_count == BHA2_PHASE_CAP) {           /* full: drop oldest */
-        c->phase_head = (uint16_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
+        c->phase_head = (uint8_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
         c->phase_count--;
     }
-    uint16_t idx = (uint16_t)((c->phase_head + c->phase_count) % BHA2_PHASE_CAP);
+    uint8_t idx = (uint8_t)((c->phase_head + c->phase_count) % BHA2_PHASE_CAP);
     c->phase_val[idx]   = v;
     c->phase_at_ms[idx] = t;
     c->phase_count++;
-    /* Time-bound the ring to KEEP_MS so the rate estimator sees a fixed history
-     * regardless of frame rate. Both consumers sub-select from this. */
-    while (c->phase_count > 0U &&
-           (uint32_t)(t - c->phase_at_ms[c->phase_head]) > BHA2_PHASE_KEEP_MS) {
-        c->phase_head = (uint16_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
-        c->phase_count--;
-    }
 }
 
-/* Peak-to-peak amplitude of the breath-phase over the last AMP_WIN_MS (a
- * sub-window of the ring; ring eviction itself happens in phase_push).  Sets
- * *valid only when that window is well-formed: enough samples, the newest is
- * fresh, and it spans a slow breath cycle (so a slow breath isn't mistaken for
- * a hold).  A stalled phase stream (UART dropout) ages out → *valid=false → no
- * false hold. */
+/* Evict samples older than the window, then return the peak-to-peak amplitude
+ * of the remaining breath-phase values.  Sets *valid only when the window is
+ * well-formed: enough samples, the newest is fresh, and it spans long enough
+ * to contain a slow breath cycle (so a slow breath isn't mistaken for a hold).
+ * A stalled phase stream (UART dropout) ages out → *valid=false → no false
+ * hold. */
 static float phase_amplitude(Bha2Ctx *c, uint32_t now, bool *valid) {
+    while (c->phase_count > 0U &&
+           (uint32_t)(now - c->phase_at_ms[c->phase_head]) > BHA2_PHASE_WIN_MS) {
+        c->phase_head = (uint8_t)((c->phase_head + 1U) % BHA2_PHASE_CAP);
+        c->phase_count--;
+    }
     *valid = false;
-    float lo = 0.0f, hi = 0.0f;
-    uint32_t oldest = 0, newest = 0;
-    int cnt = 0;
-    for (uint16_t i = 0; i < c->phase_count; i++) {
-        uint16_t idx = (uint16_t)((c->phase_head + i) % BHA2_PHASE_CAP);
-        uint32_t ts = c->phase_at_ms[idx];
-        if ((uint32_t)(now - ts) > BHA2_AMP_WIN_MS) {
-            continue;                       /* older than the amplitude window */
-        }
-        float x = c->phase_val[idx];
-        if (cnt == 0) {
-            lo = hi = x; oldest = newest = ts;
-        } else {
-            if (x < lo) lo = x;
-            if (x > hi) hi = x;
-            if (ts > newest) newest = ts;
-            if (ts < oldest) oldest = ts;
-        }
-        cnt++;
-    }
-    if (cnt < (int)BHA2_PHASE_MIN_N) {
+    if (c->phase_count < BHA2_PHASE_MIN_N) {
         return 0.0f;
     }
-    if ((uint32_t)(now - newest) > BHA2_PHASE_FRESH_MS) {
+    uint8_t newest = (uint8_t)((c->phase_head + c->phase_count - 1U) % BHA2_PHASE_CAP);
+    if ((uint32_t)(now - c->phase_at_ms[newest]) > BHA2_PHASE_FRESH_MS) {
         return 0.0f;
     }
-    if ((newest - oldest) < BHA2_PHASE_MIN_SPAN_MS) {
+    if ((uint32_t)(c->phase_at_ms[newest] - c->phase_at_ms[c->phase_head])
+            < BHA2_PHASE_MIN_SPAN_MS) {
         return 0.0f;
+    }
+    float lo = c->phase_val[c->phase_head];
+    float hi = lo;
+    for (uint8_t i = 0; i < c->phase_count; i++) {
+        float x = c->phase_val[(c->phase_head + i) % BHA2_PHASE_CAP];
+        if (x < lo) lo = x;
+        if (x > hi) hi = x;
     }
     *valid = true;
     return hi - lo;
@@ -258,9 +224,6 @@ static void handle_frame(Bha2Ctx *c, uint16_t type, const uint8_t *data,
         if (len >= 4) {
             c->last_breath = le_float(data);
             c->last_breath_at_ms = t;
-#if BHA2_CAPTURE
-            LOG_I("CAP,B,%lu,%.3f", (unsigned long)t, (double)c->last_breath);
-#endif
         }
         break;
 
@@ -278,10 +241,6 @@ static void handle_frame(Bha2Ctx *c, uint16_t type, const uint8_t *data,
             if (flag == 1u && cm > 0.0f) {
                 c->last_distance_mm = (uint32_t)(cm * 10.0f);
                 c->last_distance_at_ms = t;
-#if BHA2_CAPTURE
-                LOG_I("CAP,D,%lu,%lu", (unsigned long)t,
-                      (unsigned long)c->last_distance_mm);
-#endif
             } else {
                 /* "no valid target" — clear distance immediately so we don't
                  * keep reporting a stale one while the radar says nobody. */
@@ -303,13 +262,7 @@ static void handle_frame(Bha2Ctx *c, uint16_t type, const uint8_t *data,
          * (offset 4) is the chest-displacement signal; ring it for the
          * amplitude used by phase-based breath-hold detection (ADR-0006). */
         if (len >= 12) {
-            float ph_breath = le_float(data + 4);
-            phase_push(c, ph_breath, t);
-#if BHA2_CAPTURE
-            LOG_I("CAP,P,%lu,%.4f,%.4f,%.4f", (unsigned long)t,
-                  (double)le_float(data), (double)ph_breath,
-                  (double)le_float(data + 8));
-#endif
+            phase_push(c, le_float(data + 4), t);
         }
         break;
 
@@ -400,10 +353,6 @@ static err_t bha2_init(void *ctx, uart_inst_t *uart) {
     c->human_flag = false;
     c->last_breath_at_ms = c->last_heart_at_ms = c->last_distance_at_ms =
         c->human_flag_at_ms = c->last_any_frame_at_ms = 0;
-    c->last_freq_rpm = 0.0f;
-    c->last_freq_valid = false;
-    c->last_freq_at_ms = 0;
-    c->last_est_ms = 0;
     phase_reset(c);
 
     c->initialised = true;
@@ -434,35 +383,14 @@ static err_t bha2_read_sample(void *ctx, RadarSample *out, uint32_t timeout_ms) 
     uint32_t t = now_ms();
     memset(out, 0, sizeof(*out));
 
+    bool breath_fresh   = (c->last_breath_at_ms   != 0) && (t - c->last_breath_at_ms   < RADAR_STALE_MS);
     bool heart_fresh    = (c->last_heart_at_ms    != 0) && (t - c->last_heart_at_ms    < RADAR_STALE_MS);
     bool distance_fresh = (c->last_distance_at_ms != 0) && (t - c->last_distance_at_ms < RADAR_STALE_MS);
     bool human_fresh    = (c->human_flag_at_ms    != 0) && (t - c->human_flag_at_ms    < RADAR_STALE_MS);
     bool frames_fresh   = (c->last_any_frame_at_ms != 0)
                        && (t - c->last_any_frame_at_ms < RADAR_STALE_MS);
 
-    /* Breath rate from our own phase-waveform estimator (breath_freq.c), NOT
-     * the radar's 0x0A14 BR — that field over-reports at slow breathing. The
-     * estimate is throttled to ~2 Hz (it scans up to 30 s of ring each run) and
-     * blanked when its spectral peak isn't prominent (just noise / nobody). */
-    if (c->last_est_ms == 0 || (uint32_t)(t - c->last_est_ms) >= 500U) {
-        BreathFreqResult bf = breath_freq_estimate(
-            c->phase_val, c->phase_at_ms, (int)BHA2_PHASE_CAP,
-            (int)c->phase_head, (int)c->phase_count, t);
-        c->last_freq_rpm   = bf.rpm;
-        c->last_freq_valid = bf.valid;
-        if (bf.valid) {
-            c->last_freq_at_ms = t;
-        }
-        c->last_est_ms = t;
-#if BHA2_CAPTURE
-        LOG_I("CAP,E,%lu,%.2f,%.2f,%d", (unsigned long)t,
-              (double)bf.rpm, (double)bf.confidence, bf.valid ? 1 : 0);
-#endif
-    }
-    bool breath_avail = c->last_freq_valid &&
-                        ((uint32_t)(t - c->last_freq_at_ms) < RADAR_STALE_MS);
-
-    out->breath_rpm  = breath_avail   ? c->last_freq_rpm    : 0.0f;
+    out->breath_rpm  = breath_fresh   ? c->last_breath      : 0.0f;
     out->heart_bpm   = heart_fresh    ? c->last_heart       : 0.0f;
     out->distance_mm = distance_fresh ? c->last_distance_mm : 0u;
     /* Presence: trust the explicit 0x0F09 flag when fresh, otherwise derive
@@ -475,15 +403,14 @@ static err_t bha2_read_sample(void *ctx, RadarSample *out, uint32_t timeout_ms) 
     out->resp_motion_amp_valid = amp_valid;
 
     /* Quality:
-     *  3 invalid  — no frames at all in this call AND no fresh vital
-     *  2 degraded — presence but no breath/heart current (ghost / startup /
-     *               estimator still warming up its 30 s window)
+     *  3 invalid  — no frames at all in this call AND no fresh latched values
+     *  2 degraded — presence but no breath/heart fresh (ghost / startup)
      *  0 ok       — at least one of breath_rpm / heart_bpm is current        */
-    if (!any && !breath_avail && !heart_fresh) {
+    if (!any && !breath_fresh && !heart_fresh) {
         out->q = 3;
         return ERR_TIMEOUT;
     }
-    if (out->presence && !breath_avail && !heart_fresh) {
+    if (out->presence && !breath_fresh && !heart_fresh) {
         out->q = 2;
     } else {
         out->q = 0;
