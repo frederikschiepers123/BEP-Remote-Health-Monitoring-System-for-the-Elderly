@@ -252,11 +252,6 @@ Module.register("MMM-SensorUI", {
     const infoWrapper = document.createElement("div");
     infoWrapper.className = "infoWrapper";
 
-    const infoIcon = document.createElement("div");
-    infoIcon.className = "infoIcon";
-
-    infoIcon.innerHTML = `<i class="fas fa-circle-info"></i>`;
-
     const infoText = document.createElement("div");
     infoText.className = "infoText";
 
@@ -277,7 +272,6 @@ Module.register("MMM-SensorUI", {
       infoText.innerHTML = stampBlock;
     }
 
-    infoWrapper.appendChild(infoIcon);
     infoWrapper.appendChild(infoText);
 
     /*

@@ -55,6 +55,12 @@
   display: flex;
   justify-content: space-evenly;
   align-items: center;
+  /* Hold the flex share and clip own content. Without min-height:0 these rows
+   * have min-height:auto and refuse to shrink, so when tile content changes
+   * (e.g. Measuring <-> values) they grow and push the footer past the
+   * sensorWrapper clip edge -> the "last updated" stamp drops off-screen. */
+  min-height: 0;
+  overflow: hidden;
   /* gap: 20px; */
 }
 
