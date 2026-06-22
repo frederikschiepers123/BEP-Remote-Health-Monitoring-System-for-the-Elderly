@@ -28,7 +28,7 @@ All I²C peripherals share one bus (one mutex, root `CLAUDE.md §7.2`).
   | AHT21 (env, alt-populate) | `0x38` | `BOARD_AHT21_ADDR` | fixed address |
   | ENS160 (air quality) | `0x53` | `BOARD_ENS160_ADDR` | `0x52` if ADDR pulled low |
   | BH1750 (light, advanced module) | `0x23` | `BOARD_BH1750_ADDR` | `0x5C` if ADDR pulled high |
-  | SH1106 OLED | `0x3C` | `BOARD_OLED_ADDR` | `0x3D` if SA0 high |
+  | SH1122 OLED (256×64) | `0x3C` | `BOARD_OLED_ADDR` | `0x3D` if SA0 high |
 
   The env footprint takes BME280 **or** AHT21; the light footprint takes BH1750
   (here) **or** the GL5516 LDR (ADC, below). Selection is via `/cfg/sensors.json`
@@ -106,8 +106,8 @@ Software debounce: 50 ms one-shot FreeRTOS timer (`ui_input.c`).
 
 | GPIO | Pin | Signal | `BOARD_*` | Notes |
 |---|---|---|---|---|
-| 14 | 19 | LED_POWER | `BOARD_LED_POWER_PIN` | "system on" indicator |
-| 15 | 20 | LED_WIFI | `BOARD_LED_WIFI_PIN` | "wifi associated" indicator |
+| 15 | 20 | LED_POWER | `BOARD_LED_POWER_PIN` | "system on" indicator (swapped to match as-built PCB) |
+| 14 | 19 | LED_WIFI | `BOARD_LED_WIFI_PIN` | "wifi associated" indicator (swapped to match as-built PCB) |
 | — | — | CYW43 onboard LED | (via `pico_cyw43_arch`) | net-state; not a bare GPIO |
 
 ---
