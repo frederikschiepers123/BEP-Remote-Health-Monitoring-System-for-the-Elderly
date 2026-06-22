@@ -6,7 +6,14 @@
   display: flex;
   flex-direction: column;
   gap: 2vh;
-  height: 100%;
+  /* Bound to the viewport and clip. The MM module parent is auto-height, so
+   * the old height:100% was a no-op: the column grew with content and pushed
+   * the "Vitals last updated" footer past the bottom edge. 84vh leaves room
+   * for the clock that sits above us in top_center; the footer keeps its flex
+   * share on-screen regardless of how tall the tiles get. */
+  height: 84vh;
+  overflow: hidden;
+  box-sizing: border-box;
   width: 100%;
 }
 
