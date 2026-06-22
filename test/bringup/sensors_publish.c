@@ -1036,6 +1036,33 @@ static bool sw_disp_pressed_edge(void)
     return edge;
 }
 
+/* Current OLED page — owned by input_task, read by render_task (volatile
+ * single byte; no torn read on the M33). */
+static volatile uint8_t s_oled_page = 0;
+
+/* Dedicated button task: polls SW2 at ~30 Hz and advances the page (+ a 3 s
+ * auto-cycle). Runs at a HIGHER priority than render_task so it preempts the
+ * slow (~0.7 s @ 100 kHz) OLED-flush busy-wait via the systick — otherwise SW2
+ * is only sampled once per render loop (~1 Hz) and short taps get dropped. */
+static void input_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));   /* let sensors_task's discrete_gpio_init() configure GP16 */
+    TickType_t last_cycle = xTaskGetTickCount();
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if (sw_disp_pressed_edge()) {
+            s_oled_page = (uint8_t)((s_oled_page + 1) % N_OLED_PAGES);
+            last_cycle = now;
+            printf("[bringup] SW2 -> page %u\n", (unsigned)s_oled_page);
+        } else if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
+            s_oled_page = (uint8_t)((s_oled_page + 1) % N_OLED_PAGES);
+            last_cycle = now;
+        }
+        vTaskDelay(pdMS_TO_TICKS(30));   /* ~33 Hz button poll */
+    }
+}
+
 static void render_task(void *arg)
 {
     (void)arg;
@@ -1043,24 +1070,12 @@ static void render_task(void *arg)
     while (!s_oled_ok) vTaskDelay(pdMS_TO_TICKS(200));
 
     TickType_t boot_tick = xTaskGetTickCount();
-    TickType_t last_cycle = boot_tick;
-    uint8_t page = 0;
 
     for (;;) {
-        TickType_t now = xTaskGetTickCount();
-        /* SW2 short-press: advance page immediately + reset the auto-cycle
-         * dwell so a tap doesn't get immediately overridden. */
-        if (sw_disp_pressed_edge()) {
-            page = (uint8_t)((page + 1) % N_OLED_PAGES);
-            last_cycle = now;
-            printf("[bringup] SW2 → page %u\n", (unsigned)page);
-        } else if ((now - last_cycle) >= pdMS_TO_TICKS(3000)) {
-            page = (uint8_t)((page + 1) % N_OLED_PAGES);
-            last_cycle = now;
-        }
-        uint32_t uptime_s = (uint32_t)((now - boot_tick) / configTICK_RATE_HZ);
+        uint32_t uptime_s =
+            (uint32_t)((xTaskGetTickCount() - boot_tick) / configTICK_RATE_HZ);
 
-        switch (page) {
+        switch (s_oled_page) {
         case 0: render_page_net(uptime_s); break;
         case 1: render_page_env(s_env_seq); break;
         case 2: render_page_air(s_air_seq); break;
@@ -1312,6 +1327,10 @@ int main(void)
     /* OLED render runs at lower priority + core 0 so the sensor+MQTT task
      * always pre-empts it. ~3 KB stack is enough for snprintf + sh1122. */
     xTaskCreateAffinitySet(render_task,  "oled",    3072, NULL, 1, 0x01, NULL);
+    /* SW2 button task — higher prio than render so it preempts the slow OLED
+     * flush busy-wait (via the systick) and stays responsive; core 0 like the
+     * rest. Owns s_oled_page; render_task just draws it. */
+    xTaskCreateAffinitySet(input_task,   "btn",     2048, NULL, 4, 0x01, NULL);
 #endif
     vTaskStartScheduler();
     for (;;) { tight_loop_contents(); }
