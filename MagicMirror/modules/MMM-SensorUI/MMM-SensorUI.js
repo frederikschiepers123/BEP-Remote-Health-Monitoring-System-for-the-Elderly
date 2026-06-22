@@ -46,15 +46,6 @@ const AIR_QUALITY_STATUS = {
   "Unhealthy": "red",
 };
 
-// Suspected-hyperventilation banner: at/above this breath rate the breath tile
-// shows "Hyperventilation?" (red) instead of the plain unit. This is tachypnea,
-// NOT a confirmed diagnosis — the "?" is deliberate, pending clinical sign-off
-// (CLAUDE.md §9.5). >24 RPM is already the red band (THRESHOLDS.respiratoryRate),
-// and the firmware caps the sensor at ~30, so this fires only at the very top of
-// the band. 25-28 RPM already turns the tile red (the symbol), which is enough on
-// its own; the text appears only at >=29. Sibling of the "No breathing" banner.
-const RESP_HYPERVENT_RPM = 29;
-
 Module.register("MMM-SensorUI", {
   defaults: {},
 
@@ -167,17 +158,12 @@ Module.register("MMM-SensorUI", {
       );
 
       // Breath tile precedence: a confirmed hold overrides the rate (which the
-      // firmware nulls during a hold); then a sustained high rate flags
-      // suspected hyperventilation (keeps the number, swaps the caption + red);
-      // then a normal live rate; then "Measuring...".
-      const breathNum = Number(this.respiratoryRate);
+      // firmware nulls during a hold); then the live rate (the tile turns red
+      // on its own via the traffic-light thresholds when out of range); then
+      // "Measuring...".
       let breathCard;
       if (breathHold) {
         breathCard = createStatusCard("fa-lungs", "No breathing", "", "red", true);
-      } else if (breathReady && Number.isFinite(breathNum) &&
-                 breathNum >= RESP_HYPERVENT_RPM) {
-        breathCard = createStatusCard("fa-lungs", this.respiratoryRate,
-                                      "Hyperventilation?", "red");
       } else if (breathReady) {
         breathCard = createStatusCard("fa-lungs", this.respiratoryRate,
                                       "breaths<br>per min", this.respiratoryRateTL);
@@ -270,21 +256,16 @@ Module.register("MMM-SensorUI", {
     const infoText = document.createElement("div");
     infoText.className = "infoText";
 
-    /* Footer content: TWO separate "last stable reading" timestamps — one for
-     * vitals (heart/breath), one for environmentals (temp/humidity/air) —
-     * since the two come from different sensors at different rates and either
-     * can go silent independently. A frozen vitals stamp with a live env stamp
-     * means the radar stopped while the environment sensors kept publishing.
-     * An operator info message (if any) is shown above. */
+    /* Footer content: a single "last stable reading" timestamp for vitals
+     * (heart/breath). The environmentals stamp is tracked internally
+     * (this.lastEnvAt) but no longer rendered — the footer shows only the
+     * vitals stamp. An operator info message (if any) is shown above. */
     const vitalsLine = this.lastVitalAt
-      ? "Vitals updated: " + this.lastVitalAt.toLocaleTimeString()
-      : "Vitals updated: waiting…";
-    const envLine = this.lastEnvAt
-      ? "Environment updated: " + this.lastEnvAt.toLocaleTimeString()
-      : "Environment updated: waiting…";
+      ? "Vitals last updated: " + this.lastVitalAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+      : "Vitals last updated: waiting…";
     const stampBlock =
-      '<span style="font-size:0.75em;opacity:0.7;">' +
-      vitalsLine + "<br>" + envLine + "</span>";
+      '<span style="font-size:0.8em;opacity:0.9;">' +
+      vitalsLine + "</span>";
 
     if (this.infoMessage) {
       infoText.innerHTML = this.infoMessage + "<br>" + stampBlock;
