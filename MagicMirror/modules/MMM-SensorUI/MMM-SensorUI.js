@@ -74,10 +74,14 @@ Module.register("MMM-SensorUI", {
      * timestamp (supervisor feedback), not a static placeholder. */
     this.infoMessage = "";
 
-    /* Timestamp of the most recently received sensor reading (any data
-     * topic: vitals or environment).  Rendered in the footer; freezes when
-     * the device stops publishing, which makes an outage visible at a
-     * glance. */
+    /* Last-reading timestamps for the footer, persisted in localStorage so a
+     * kiosk page reload (Fully reloads on screen-on / periodically) restores
+     * the last-known time instead of resetting the footer to "waiting…" until
+     * the next (sparse, radar-dependent) reading lands. */
+    const savedVital = Number(localStorage.getItem("rmms_lastVitalAt"));
+    this.lastVitalAt = savedVital > 0 ? new Date(savedVital) : null;
+    const savedEnv = Number(localStorage.getItem("rmms_lastEnvAt"));
+    this.lastEnvAt = savedEnv > 0 ? new Date(savedEnv) : null;
     this.lastReadingAt = null;
 
   },
@@ -307,12 +311,14 @@ notificationReceived: function(notification, payload, sender) {
                   payload.topic === "sensors/respiratoryrate" ||
                   payload.topic === "sensors/respiratorymotion") {
                   this.lastVitalAt = new Date();
+                  try { localStorage.setItem("rmms_lastVitalAt", String(this.lastVitalAt.getTime())); } catch (e) {}
               } else if (payload.topic === "sensors/temperature" ||
                          payload.topic === "sensors/humidity" ||
                          payload.topic === "sensors/airquality" ||
                          payload.topic === "sensors/co2" ||
                          payload.topic === "sensors/tvoc") {
                   this.lastEnvAt = new Date();
+                  try { localStorage.setItem("rmms_lastEnvAt", String(this.lastEnvAt.getTime())); } catch (e) {}
               }
           }
 
