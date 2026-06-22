@@ -3,6 +3,7 @@ add_library(sensor_radar STATIC
     radar_bha2.c
     radar_hmmd.c
     radar_filter.c
+    breath_freq.c
     radar_task.c
 )
 
