@@ -8,7 +8,7 @@ For the purposes of this project, some modules have been added in the "modules" 
 - "MMM-SensorUI": A custom module for the UI, displaying the sensor readings (see thesis report)
 - "MMM-VidConf": A placeholder image for video conferencing (see thesis report)
 
-Some additional changes have been made in the config and css folder. Note that the MagicMirror platform normally makes use of a config.js file. However, for the purposes of this project, the folder is not stored, but generated as it contains sensitive information for the data communication. If anyone want to test only the UI, one can change the name of the provided "config.custom.sample.js" file to "config.js", and use it to run the platform.
+Some additional changes have been made in the config and css folder. Note that the MagicMirror platform normally makes use of a config.js file. However, for the purposes of this project, the folder is not stored because it contains sensitive information for the data communication. Instead the configuration is handled by other code files regarding deployment and/or communication, outside the MagicMirror folder. If anyone wants to test only the UI, one can change the name of the provided "config.custom.sample.js" file to "config.js", and use it to run the platform.
 
 ---------
 
