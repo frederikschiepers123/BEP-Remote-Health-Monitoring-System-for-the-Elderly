@@ -4,7 +4,7 @@ This folder contains the code for the UI, based on the MagicMirror² platform. B
 
 For the purposes of this project, some modules have been added in the "modules" folder:
 - "MMM-CustomMQTTBridge": A custom bridge to receive MQTT messages and send the contents as magicmirror notifications
-- "MMM-Pages": a additional ready-made module to create different pages and switch between them (from https://github.com/edward-shen/MMM-pages)
+- "MMM-Pages": an additional ready-made module to create different pages and switch between them (from https://github.com/edward-shen/MMM-pages)
 - "MMM-SensorUI": A custom module for the UI, displaying the sensor readings (see thesis report)
 - "MMM-VidConf": A placeholder image for video conferencing (see thesis report)
 
