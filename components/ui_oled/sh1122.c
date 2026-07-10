@@ -87,7 +87,10 @@ static const uint8_t s_font5x7[64][5] = {
 static err_t send_cmd(Sh1122 *dev, uint8_t cmd)
 {
     uint8_t buf[2] = { SH1122_CMD_BYTE, cmd };
-    int rc = i2c_write_blocking(dev->i2c, dev->addr, buf, 2, false);
+    /* Timeout (not _blocking): a stuck/marginal I²C bus must NOT hang here —
+     * the OLED is non-critical, but the caller holds the shared I²C mutex, so a
+     * forever-hang would deadlock the sensor tasks too. Fail fast instead. */
+    int rc = i2c_write_timeout_us(dev->i2c, dev->addr, buf, 2, false, 10000);
     if (rc < 0) {
         LOG_E("I2C cmd 0x%02X failed: %d", cmd, rc);
         return ERR_IO;
@@ -108,7 +111,9 @@ static err_t send_data_row(Sh1122 *dev, const uint8_t *row)
     uint8_t buf[1 + (SH1122_WIDTH / 2U)];
     buf[0] = SH1122_DATA_BYTE;
     memcpy(&buf[1], row, SH1122_WIDTH / 2U);
-    int rc = i2c_write_blocking(dev->i2c, dev->addr, buf, sizeof(buf), false);
+    /* ~12 ms is the nominal 129-byte row time at 100 kHz; 50 ms timeout catches
+     * a bus stall without false-positiving (see send_cmd rationale). */
+    int rc = i2c_write_timeout_us(dev->i2c, dev->addr, buf, sizeof(buf), false, 50000);
     if (rc < 0) {
         LOG_E("I2C data row failed: %d", rc);
         return ERR_IO;
