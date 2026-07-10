@@ -5,8 +5,9 @@
  *   - compensation encoding: TEMP_IN = Kelvin × 64, RH_IN = %rH × 512, byte-
  *     exact (regression: ×256 overflowed uint16 for any ambient > −17 °C,
  *     feeding the chip −128 °C — the 2026-06-12 STATUS=0x03 root cause)
- *   - not-operating recovery is debounced: OPMODE rewrite only on the 2nd
- *     consecutive STATAS-clear read (one rewrite restarts the chip's warm-up)
+ *   - not-operating recovery is debounced: OPMODE rewrite only after
+ *     ENS160_STATAS_RECOVER_READS consecutive STATAS-clear reads (a rewrite
+ *     restarts warm-up, so a freshly-starting engine must not be re-kicked)
  *
  * The mock tracks the register pointer set by read_regs' 1-byte write so it can
  * answer PART_ID / OPMODE / STATUS reads correctly, captures the last
@@ -152,7 +153,7 @@ static void test_compensation_encoding(void **state) {
     assert_int_equal(s_last_wdata[3], 0xC8);
 }
 
-/* ── recovery debounce: OPMODE rewrite only on 2nd consecutive STATAS-clear ── */
+/* ── recovery debounce: OPMODE rewrite only after N consecutive STATAS-clear ─ */
 static void test_recovery_debounced(void **state) {
     (void)state;
     Ens160 dev = { .i2c = &s_i2c, .addr = 0x53, .statas_clear_count = 0 };
@@ -161,16 +162,23 @@ static void test_recovery_debounced(void **state) {
     s_status = 0x03;                  /* STATAS clear: chip not operating */
     s_opmode_write_count = 0;
 
-    assert_int_equal(ens160_read_sample(&dev, &s), ERR_OK);
-    assert_int_equal(s_opmode_write_count, 0);   /* 1st clear: no rewrite */
+    /* The first N-1 consecutive STATAS-clear reads must NOT rewrite OPMODE — a
+     * (re)starting engine legitimately reads STATAS=0 for a cycle or two, and
+     * re-kicking it just restarts warm-up (the self-perpetuating bug). */
+    for (unsigned i = 1; i < ENS160_STATAS_RECOVER_READS; i++) {
+        assert_int_equal(ens160_read_sample(&dev, &s), ERR_OK);
+        assert_int_equal(s_opmode_write_count, 0);
+    }
 
+    /* The Nth consecutive clear triggers exactly one rewrite. */
     assert_int_equal(ens160_read_sample(&dev, &s), ERR_OK);
-    assert_int_equal(s_opmode_write_count, 1);   /* 2nd consecutive: rewrite */
+    assert_int_equal(s_opmode_write_count, 1);
 
+    /* Counter reset after the write: the next read does not rewrite again. */
     assert_int_equal(ens160_read_sample(&dev, &s), ERR_OK);
-    assert_int_equal(s_opmode_write_count, 1);   /* counter reset: not every read */
+    assert_int_equal(s_opmode_write_count, 1);
 
-    /* a good read resets the debounce: next single glitch doesn't rewrite */
+    /* A good read resets the debounce: a single later glitch doesn't rewrite. */
     s_status = 0x82;
     assert_int_equal(ens160_read_sample(&dev, &s), ERR_OK);
     s_status = 0x03;

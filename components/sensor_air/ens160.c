@@ -3,6 +3,7 @@
 
 #include "ens160.h"
 #include "err.h"
+#include "sensor_cal.h"
 
 #include "hardware/i2c.h"
 
@@ -145,8 +146,24 @@ err_t ens160_init(Ens160 *dev, i2c_inst_t *i2c, uint8_t addr)
         }
     }
 
-    LOG_I("ENS160 init OK at 0x%02X (OPMODE=0x%02X, warmup ~3 min)",
-          addr, opmode_back);
+    /* Confirm the sensing engine actually STARTED, not merely that the OPMODE
+     * register latched (a clone or a stalled part echoes OPMODE=STANDARD while
+     * STATAS stays clear). A genuine part asserts STATAS within ~1-2 cycles;
+     * poll up to ~3 s so the log shows the real state AND the engine gets
+     * settle time before the read loop begins. Non-fatal: a slow start is left
+     * to the (now patient) read-path recovery. */
+    bool statas_up = true;
+#ifndef HOST_TEST
+    statas_up = false;
+    for (int i = 0; i < 30; i++) {
+        uint8_t st = 0;
+        if (read_regs(dev, ENS160_REG_STATUS, &st, 1) == ERR_OK
+            && ens160_is_operating(st)) { statas_up = true; break; }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+#endif
+    LOG_I("ENS160 init OK at 0x%02X (OPMODE=0x%02X, STATAS %s, warmup ~3 min)",
+          addr, opmode_back, statas_up ? "up" : "not up yet");
     return ERR_OK;
 }
 
@@ -190,8 +207,15 @@ err_t ens160_read_sample(Ens160 *dev, Ens160Sample *out)
 
     out->status   = buf[0];
     out->aqi      = buf[1];
-    out->tvoc_ppb = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
-    out->co2_ppm  = (uint16_t)buf[4] | ((uint16_t)buf[5] << 8);
+
+    /* Per-board trim (sensor_cal.h): add in 32-bit, clamp back to the
+     * field's u16 range. */
+    int32_t tvoc = (int32_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8))
+                   + CAL_AIR_TVOC_DELTA_PPB;
+    int32_t co2  = (int32_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8))
+                   + CAL_AIR_CO2_DELTA_PPM;
+    out->tvoc_ppb = (uint16_t)(tvoc < 0 ? 0 : (tvoc > 65535 ? 65535 : tvoc));
+    out->co2_ppm  = (uint16_t)(co2  < 0 ? 0 : (co2  > 65535 ? 65535 : co2));
 
     LOG_D("ENS160 sample: status=0x%02X AQI=%u TVOC=%u ppb CO2=%u ppm",
           out->status, out->aqi, out->tvoc_ppb, out->co2_ppm);
@@ -205,14 +229,16 @@ err_t ens160_read_sample(Ens160 *dev, Ens160Sample *out)
      * DEBOUNCED: re-writing STANDARD restarts the chip's warm-up, so reacting
      * to a single STATAS-clear read turns a transient glitch into a real
      * ~3 min outage — and while the chip is persistently down it would
-     * re-issue on every read, never letting a restart complete. Require 2
-     * consecutive not-operating reads before recovering, and reset the
-     * counter after the write so the next rewrite is at least 2 reads away.
-     * The caller still marks every not-operating sample q=3. STATER is
-     * logged so a genuine hardware fault is visible. */
+     * re-issue on every read, never letting a restart complete. Require
+     * ENS160_STATAS_RECOVER_READS consecutive not-operating reads before
+     * recovering (raised from 2, which at 1 Hz re-kicked about every
+     * measurement cycle and perpetually restarted a *genuine* chip — bench
+     * 2026-06-19), and reset the counter after the write so the next rewrite is
+     * a full debounce window away. The caller still marks every not-operating
+     * sample q=3. STATER is logged so a genuine hardware fault is visible. */
     if (!ens160_is_operating(buf[0])) {
         dev->statas_clear_count++;
-        if (dev->statas_clear_count >= 2U) {
+        if (dev->statas_clear_count >= ENS160_STATAS_RECOVER_READS) {
             LOG_W("ENS160 not running (status=0x%02X, STATER=%d) — re-entering STANDARD",
                   buf[0], (buf[0] & ENS160_STATUS_STATER) ? 1 : 0);
             (void)write_reg(dev, ENS160_REG_OPMODE, ENS160_OPMODE_STANDARD);
