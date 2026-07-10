@@ -24,13 +24,13 @@ All I²C peripherals share one bus (one mutex, root `CLAUDE.md §7.2`).
 
   | Device | Addr | `BOARD_*` | Notes |
   |---|---|---|---|
-  | BME280 (env, default-populate) | `0x76` | `BOARD_BME280_ADDR` | `0x77` if SDO high |
+  | BMP280 (env, default-populate) | `0x76` | `BOARD_BMP280_ADDR` | `0x77` if SDO high; chip ID `0x58` (it is a BMP280, not a BME280 — no humidity) |
   | AHT21 (env, alt-populate) | `0x38` | `BOARD_AHT21_ADDR` | fixed address |
   | ENS160 (air quality) | `0x53` | `BOARD_ENS160_ADDR` | `0x52` if ADDR pulled low |
   | BH1750 (light, advanced module) | `0x23` | `BOARD_BH1750_ADDR` | `0x5C` if ADDR pulled high |
   | SH1122 OLED (256×64) | `0x3C` | `BOARD_OLED_ADDR` | `0x3D` if SA0 high |
 
-  The env footprint takes BME280 **or** AHT21; the light footprint takes BH1750
+  The env footprint takes BMP280 **or** AHT21; the light footprint takes BH1750
   (here) **or** the GL5516 LDR (ADC, below). Selection is via `/cfg/sensors.json`
   (root `CLAUDE.md §3.2`, ADR-0001).
 
@@ -140,7 +140,7 @@ tablet data link.
 | Rail | Source | Consumers |
 |---|---|---|
 | 5 V mains | External PSU | MCU (V-SYS pin 39), mmWave radar (isolated rail) |
-| 3V3 (from MCU) | Pico 2 WH onboard LDO (OUT pin 36) | BME280/AHT21, ENS160, BH1750, OLED, LDR, button, LEDs |
+| 3V3 (from MCU) | Pico 2 WH onboard LDO (OUT pin 36) | BMP280/AHT21, ENS160, BH1750, OLED, LDR, button, LEDs |
 | Radar 5 V | Separate mains rail | Seeed MR60BHA2 (high RF draw) |
 
 Common ground on pin 38. The radar must not share its 5 V supply with the MCU

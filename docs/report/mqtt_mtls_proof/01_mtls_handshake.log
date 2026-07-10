@@ -1,0 +1,101 @@
+Can't use SSL_get_servername
+depth=1 CN = RMMS-Project-CA
+verify return:1
+depth=0 CN = tablet.local
+verify return:1
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN = tablet.local
+   i:CN = RMMS-Project-CA
+   a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA256
+   v:NotBefore: Jun 14 10:31:00 2026 GMT; NotAfter: Jun 13 10:31:00 2028 GMT
+ 1 s:CN = RMMS-Project-CA
+   i:CN = RMMS-Project-CA
+   a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA256
+   v:NotBefore: May 31 20:48:34 2026 GMT; NotAfter: May 28 20:48:34 2036 GMT
+---
+Server certificate
+[PEM certificate body redacted for the repo — CLAUDE.md §19: no cert material is committed, even public certs]
+subject=CN = tablet.local
+issuer=CN = RMMS-Project-CA
+---
+No client certificate CA names sent
+Client Certificate Types: RSA sign, DSA sign, ECDSA sign
+Requested Signature Algorithms: ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:Ed25519:Ed448:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:ECDSA+SHA224:RSA+SHA224:DSA+SHA224:DSA+SHA256:DSA+SHA384:DSA+SHA512
+Shared Requested Signature Algorithms: ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:Ed25519:Ed448:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:ECDSA+SHA224:RSA+SHA224:DSA+SHA224:DSA+SHA256:DSA+SHA384:DSA+SHA512
+Peer signing digest: SHA256
+Peer signature type: ECDSA
+Server Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1937 bytes and written 1265 bytes
+Verification: OK
+---
+New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384
+Server public key is 256 bit
+Secure Renegotiation IS supported
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+SSL-Session:
+    Protocol  : TLSv1.2
+    Cipher    : ECDHE-ECDSA-AES256-GCM-SHA384
+    Session-ID: FAE848FC044507B3BED055DD58048131E689E600CB5CA9FA29CAC263C3F876D1
+    Session-ID-ctx: 
+    Master-Key: EE5A717AAFFBA5E6916A2AECF1EEB486668DD395AC3D00522CB020984DE6DB6EF750B29B2C63B2D073B2F7254FE9BA50
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    TLS session ticket lifetime hint: 7200 (seconds)
+    TLS session ticket:
+    0000 - 9d 61 52 68 8f 80 da a1-32 d7 6c 72 08 93 18 24   .aRh....2.lr...$
+    0010 - f9 1e f7 66 3f 5b 16 36-07 9c 82 6c b1 27 7b 3c   ...f?[.6...l.'{<
+    0020 - 80 e0 16 98 f3 22 da 90-7c 9b 28 c4 4e 69 84 51   ....."..|.(.Ni.Q
+    0030 - 40 de 19 9f 89 0f dc 5b-49 58 f7 38 62 f1 12 ce   @......[IX.8b...
+    0040 - 10 47 0f 48 31 45 5f bf-5e 8c 8c 0c 9f 60 3b 47   .G.H1E_.^....`;G
+    0050 - 63 7f 30 e0 92 60 07 da-ab 94 2f 2f a9 aa b9 1b   c.0..`....//....
+    0060 - d1 69 7e 1e 76 6e 45 67-cd ae df 86 82 28 9f cb   .i~.vnEg.....(..
+    0070 - c3 97 54 ea be b2 97 3b-b7 33 03 d1 b0 b4 28 08   ..T....;.3....(.
+    0080 - 54 23 67 9e b3 a7 4a b2-f8 5a dd a8 3a 9a 88 51   T#g...J..Z..:..Q
+    0090 - 52 c8 1b 0f 7a ce b4 ba-d7 3f a3 f3 15 e5 bd 64   R...z....?.....d
+    00a0 - a9 1a 77 bb 47 83 02 9c-02 78 3f cc 1c 7e 76 27   ..w.G....x?..~v'
+    00b0 - 89 54 f6 15 91 f4 1d d5-ed 0e 85 78 79 26 90 2c   .T.........xy&.,
+    00c0 - 75 b8 8d 10 ba e8 64 8c-d5 a9 54 aa 1f 33 f4 ce   u.....d...T..3..
+    00d0 - 4c af 90 d4 2f ff e6 04-97 b6 af 2a 65 67 32 8a   L.../......*eg2.
+    00e0 - 7f 92 8c 1c 3f 6e d8 1c-e6 cf f5 88 df c9 3a 09   ....?n........:.
+    00f0 - 52 c1 25 cd 3c 9f 74 8a-77 10 7a da 90 cf d4 18   R.%.<.t.w.z.....
+    0100 - 79 7d 07 e3 0b 78 e6 16-10 ce f7 f2 ab 41 03 02   y}...x.......A..
+    0110 - 29 fd 04 24 9a ed 70 2c-8b 40 3d 25 9b 08 11 e0   )..$..p,.@=%....
+    0120 - 69 e1 20 a5 27 35 ea 45-35 9d ce ae a7 ba be 83   i. .'5.E5.......
+    0130 - 91 2f dc 21 6d d5 49 39-6a 13 db 46 3d 0e ca b1   ./.!m.I9j..F=...
+    0140 - a1 7b 15 93 75 47 85 8f-08 97 4a 24 dc 86 91 8c   .{..uG....J$....
+    0150 - 0a 36 a5 eb 71 af bb 48-68 52 4c 52 c3 42 b9 ef   .6..q..HhRLR.B..
+    0160 - 18 6f 85 71 62 b0 69 4a-a9 9d 04 32 c2 9f 26 6d   .o.qb.iJ...2..&m
+    0170 - 3c ec 4e 8f 9a 15 b6 8e-9a 49 03 ec 5a 2d 6b 77   <.N......I..Z-kw
+    0180 - b1 d1 85 3a c3 db 93 f1-de 96 55 83 23 cc 1c 90   ...:......U.#...
+    0190 - 46 84 09 4f 68 2a b5 04-f9 2f dc c0 e3 cb 52 7a   F..Oh*.../....Rz
+    01a0 - 5c 03 8d 05 f7 48 81 b1-68 24 42 3e 37 8f b6 a2   \....H..h$B>7...
+    01b0 - 7b f0 bd 81 cf 1f 2a 6c-98 02 5e ed 45 25 5f a8   {.....*l..^.E%_.
+    01c0 - 25 99 f1 da 6b da aa 84-be d3 bb 3e 55 a5 1a de   %...k......>U...
+    01d0 - c6 f6 95 8a a0 f2 28 41-68 49 c2 10 c7 61 d4 56   ......(AhI...a.V
+    01e0 - 7f c0 ec 6d 84 5a c8 a3-54 21 d8 2e c8 03 ea 22   ...m.Z..T!....."
+    01f0 - 98 d5 01 51 c8 86 61 fe-b7 e7 25 9c 07 81 f9 8a   ...Q..a...%.....
+    0200 - c2 7a 25 1a 7f 35 d3 fb-b5 a2 a7 92 c1 35 97 3c   .z%..5.......5.<
+    0210 - 5b 62 2d 52 9c c9 07 ed-aa cc a1 08 a6 41 33 60   [b-R.........A3`
+    0220 - 1d 6d d2 69 8b ae 0c a5-6b c6 7e f7 07 63 9d 2d   .m.i....k.~..c.-
+    0230 - b1 88 88 a4 dc 46 b4 a3-cb 1d 19 d2 4b 96 e4 d6   .....F......K...
+    0240 - 82 09 7e dc f1 43 05 6c-db da 56 2d c7 7e ce a9   ..~..C.l..V-.~..
+    0250 - ce e5 32 56 0a 0d 91 4c-74 a3 73 f6 71 f2 87 c3   ..2V...Lt.s.q...
+    0260 - 34 c4 49 fe c4 a3 4c dc-8d 23 89 33 52 ac 29 d0   4.I...L..#.3R.).
+    0270 - 42 cc 3b b6 52 5f 9e ce-e6 ae 81 09 48 d8 0c 29   B.;.R_......H..)
+    0280 - 7c 2d a0 00 d4 36 c5 88-1c fc de f5 4b d7 2c 62   |-...6......K.,b
+    0290 - 24 95 bb c0 8b c1 90 14-94 d1 2a 58 aa 7b fb 9f   $.........*X.{..
+    02a0 - 36 30 a2 6d 4e db 87 58-5f e0 92 14 50 bb 69 4b   60.mN..X_...P.iK
+    02b0 - 51 2a d9 d7 bc 14 5f af-99 f0 1d e4 1f 8c f1 9c   Q*...._.........
+
+    Start Time: 1782072592
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: yes
+---
+DONE

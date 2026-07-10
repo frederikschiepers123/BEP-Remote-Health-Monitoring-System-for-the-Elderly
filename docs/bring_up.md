@@ -108,17 +108,20 @@ LOG_I("Boot count: %lu", (unsigned long)count);
 
 ---
 
-## Step 5 — Environment (AHT21 or BME280)
+## Step 5 — Environment (AHT21 or BMP280)
 
 **Goal:** `env_task` drives the `env_driver_t` v-table and publishes JSON samples
 to a local debug sink (not yet MQTT). Selected via `/cfg/sensors.json` `"env"`
-(`"aht21"` | `"bme280"`). (`test/bringup/bme280_only.c`.)
+(`"aht21"` | `"bmp280"`; legacy `"bme280"` accepted as an alias).
+(`test/bringup/bmp280_only.c`, `test/bringup/aht21_only.c`.)
 
 - Verify I²C0 wiring (GP8 SDA / GP9 SCL) and pull-ups.
 - Log each sample; validate the `snprintf` encoder, **including the
-  `"pres_hpa": null` path when the AHT21 is selected** (it has no pressure
-  sensor).
-- Expected: temp ~20–30 °C, humidity ~20–80 %, pressure ~950–1050 hPa (BME280).
+  `"pres_hpa": null` path when the AHT21 is selected** (no pressure sensor)
+  **and the `"hum_pct": null` path when the BMP280 is selected** (no humidity
+  sensor — the part is a BMP280, chip ID `0x58`, not a BME280).
+- Expected: temp ~20–30 °C; humidity ~20–80 % (AHT21); pressure ~950–1050 hPa
+  (BMP280).
 
 **Pass:** 1 Hz samples with plausible values; `q=0`; no `ERR_IO`.
 
@@ -138,11 +141,11 @@ driver reports `q=2` and AQI sits low until the gas heaters stabilise.
 
 ## Step 6 — OLED
 
-**Goal:** SH1106 shows page 1 (status) and page 2 (last env sample); the button
-cycles pages. (`test/bringup/oled_only.c`.)
+**Goal:** SH1122 (256×64) shows page 1 (status) and page 2 (last env sample);
+the button cycles pages. (`test/bringup/oled_only.c`.)
 
-- I²C0 address `0x3C` (SA0 low) / `0x3D`. Confirm the controller is SH1106 (root
-  `CLAUDE.md §16 Q1`).
+- I²C0 address `0x3C` (SA0 low) / `0x3D`. Controller is SH1122 (confirmed,
+  root `CLAUDE.md §16 Q1`).
 - One user button on GP16 (active-low, internal pull-up); `ui_input_init()`.
 
 **Pass:** pages cycle on press; env values update at 1 Hz; no I²C errors.

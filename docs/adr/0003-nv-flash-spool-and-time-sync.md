@@ -10,7 +10,7 @@ during a Wi-Fi or MQTT-broker outage**, and every buffered measurement must
 carry its **original timestamp**. The downstream SBC (Radxa Dragon Q6A; a Pine64
 ROCKPro64 stands in for the demo) is the local gateway to the hospital FHIR
 endpoint, with its own ≥24 h store-and-forward queue and `Observation.identifier`
-idempotency (see `docs/CLAUDE_radxa.md` §8.6/§10 and
+idempotency (see `sbc/CLAUDE.md` §8.6/§10 and
 `docs/sbc-failover-and-idempotency.md`). For that end-to-end chain to actually be
 lossless and idempotent, the firmware must hold up its end:
 
@@ -138,6 +138,6 @@ state" rule concerns first-party allocations, not this SDK-internal mechanism.
 - CLAUDE.md §2.1/§2.3 (transports / buffer), §8.3 (MQTT QoS + subscriptions),
   §9.2.1 (envelope `seq`/`wall_ms`), §9.2.5 (`time/set`), §9.6 (FHIR contract),
   §11 (flash map), §13.6 (never silently drop), §16-Q6 (RTC source).
-- `docs/CLAUDE_radxa.md` §6.3/§8.6/§10 — SBC dedup, identifier scheme, SQLite buffer.
+- `sbc/CLAUDE.md` §6.3/§8.6/§10 — SBC dedup, identifier scheme, SQLite buffer.
 - `docs/sbc-failover-and-idempotency.md` — the end-to-end cross-tier contract.
 - ADR-0002 (Wi-Fi sole transport — this spool is its lossless-buffer complement).

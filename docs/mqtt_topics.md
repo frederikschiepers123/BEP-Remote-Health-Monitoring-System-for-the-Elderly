@@ -19,7 +19,7 @@ so a message may be delayed or re-sent after an outage — consumers dedup on `s
 
 | Topic | Direction | QoS | Retained | Notes |
 |---|---|---|---|---|
-| `rmms/<uuid>/env` | publish | 1 | no | Environment sample (BME280 or AHT21) |
+| `rmms/<uuid>/env` | publish | 1 | no | Environment sample (BMP280 or AHT21) |
 | `rmms/<uuid>/air` | publish | 1 | no | Air-quality sample (ENS160) |
 | `rmms/<uuid>/radar` | publish | 1 | no | Radar sample (raw + quality flag) |
 | `rmms/<uuid>/light` | publish | 1 | no | Light sample (BH1750 or GL5516) |
@@ -88,10 +88,13 @@ Inner `v` object:
 ```
 
 - `temp_c` — temperature in °C (`%.3f`).
-- `hum_pct` — relative humidity 0–100 % (`%.3f`).
-- `pres_hpa` — atmospheric pressure in hPa, **or `null`** when the AHT21 driver
-  is active (it has no pressure sensor). BME280 always emits a number. Receivers
-  must not assume `pres_hpa` is numeric (root `CLAUDE.md §9.2.2`/§9.2.3).
+- `hum_pct` — relative humidity 0–100 % (`%.3f`), **or `null`** when the BMP280
+  driver is active (it has no humidity sensor).
+- `pres_hpa` — atmospheric pressure in hPa (`%.3f`), **or `null`** when the
+  AHT21 driver is active (it has no pressure sensor).
+- Exactly one of `hum_pct` / `pres_hpa` is `null`, depending on which env part
+  is populated. Receivers must not assume either is numeric (root
+  `CLAUDE.md §9.2.2`/§9.2.3).
 
 ---
 

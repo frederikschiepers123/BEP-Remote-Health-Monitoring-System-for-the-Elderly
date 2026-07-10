@@ -46,6 +46,13 @@ The `stream_t` abstraction's whole reason to exist — *one* TLS/MQTT stack over
   `lwipopts.h` and the `project-cyw43-sys-freertos-hang` note). A single
   `transport_task` owns cyw43 + Wi-Fi + TLS + MQTT and is the sole consumer of
   the sensor producer queues.
+
+  **Update (2026-06, commit `452d39f`):** the `sys_freertos` claim above did
+  not survive hardware testing — `cyw43_arch_init` was fixed, but
+  `cyw43_arch_wifi_connect` then deadlocked under that arch. The shipped
+  firmware uses `pico_cyw43_arch_lwip_threadsafe_background` (`NO_SYS=1`)
+  with every task pinned to Core 0. The single-`transport_task` ownership
+  model is unchanged. See `lwipopts.h`'s header note and CLAUDE.md §7/§8.3.
 - The USB-CDC transport, the tablet-side USB-MQTT bridge, and the USB↔Wi-Fi
   selection FSM are **not built**. The `transport_usb`, `transport_selector`,
   `transport_wifi`, `tls_context`, and `mqtt_client` components (the whole
@@ -89,4 +96,6 @@ post-v1 decision and warrants its own ADR. Until then, USB-CDC is out of scope.
 
 - CLAUDE.md §2.1 (transports), §2.2 (selection FSM), §8 (transport details).
 - ADR-0001 (the two sensor-module variants).
-- Memory: `project-cyw43-sys-freertos-hang` (why `sys_freertos` is viable now).
+- Memory: `project-cyw43-sys-freertos-hang` (the `sys_freertos` init hang —
+  and why the shipped firmware ended up on `threadsafe_background`; see the
+  2026-06 update note above).
