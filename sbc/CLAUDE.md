@@ -361,8 +361,8 @@ class EnvSample:
     seq: int
     quality: Quality                # enum: OK, STALE, DEGRADED, INVALID
     temp_c: float
-    hum_pct: float
-    pres_hpa: float
+    hum_pct: float | None           # null on BMP280 boards (no humidity sensor)
+    pres_hpa: float | None          # null on AHT21 boards (no pressure sensor)
 
 @dataclass(frozen=True, slots=True)
 class RadarSample:

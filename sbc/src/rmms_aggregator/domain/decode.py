@@ -13,6 +13,14 @@ from .quality import Quality
 from .sample import AirSample, EnvSample, LightSample, RadarSample, Sample, SENSORS
 
 TOPIC_ROOT = "rmms"
+STATUS_SUFFIX = "status"
+
+# The topic suffixes the SBC subscribes to (CLAUDE.md §6.2): the four sensor
+# topics plus the retained `status` topic. `status` is NOT a sensor sample — the
+# subscriber routes it to the device-online / time-sync path — but it IS a valid
+# firmware topic, so parse_topic must accept it rather than dead-letter it (which
+# would also suppress the time-sync publish on `status="online"`, §9.2.5).
+_VALID_SUFFIXES = frozenset((*SENSORS, STATUS_SUFFIX))
 
 
 class SchemaError(ValueError):
@@ -20,16 +28,20 @@ class SchemaError(ValueError):
 
 
 def parse_topic(topic: str) -> tuple[str, str]:
-    """`rmms/<uuid>/<sensor>` → (uuid, sensor). Raises SchemaError otherwise."""
+    """`rmms/<uuid>/<suffix>` → (uuid, suffix) for a sensor topic or `status`.
+
+    Raises SchemaError for any other shape / unknown suffix (the caller
+    dead-letters it — the firmware should never publish a topic the SBC does not
+    recognise, §6.3)."""
     parts = topic.split("/")
     if len(parts) != 3 or parts[0] != TOPIC_ROOT:
         raise SchemaError(f"unexpected topic shape: {topic!r}")
-    uuid, sensor = parts[1], parts[2]
-    if sensor not in SENSORS:
-        raise SchemaError(f"unknown sensor topic: {sensor!r}")
+    uuid, suffix = parts[1], parts[2]
+    if suffix not in _VALID_SUFFIXES:
+        raise SchemaError(f"unknown topic suffix: {suffix!r}")
     if not uuid:
         raise SchemaError("empty device uuid in topic")
-    return uuid, sensor
+    return uuid, suffix
 
 
 def _num(v: object, field: str) -> float:
@@ -95,7 +107,7 @@ def decode_sample(uuid: str, sensor: str, payload: bytes) -> Sample:
         return EnvSample(
             uuid, ts_us, wall_ms, seq, q,
             temp_c=_num(vget("temp_c"), "temp_c"),
-            hum_pct=_num(vget("hum_pct"), "hum_pct"),
+            hum_pct=(None if vget("hum_pct") is None else _num(v["hum_pct"], "hum_pct")),
             pres_hpa=(None if vget("pres_hpa") is None else _num(v["pres_hpa"], "pres_hpa")),
         )
     if sensor == "air":

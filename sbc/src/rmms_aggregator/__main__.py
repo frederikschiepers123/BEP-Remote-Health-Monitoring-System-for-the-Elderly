@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import signal
+import sys
 import threading
 import time
 
@@ -132,7 +133,13 @@ def _post_loop(repo: Repository, client: FhirClient, ingestor: Ingestor,
             stop.wait(delay)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "--version" in args or "-V" in args:
+        # No env / broker / DB needed — bring-up step 1 (§16) runs this first.
+        print(__version__)
+        return 0
+
     settings = get_settings()
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
