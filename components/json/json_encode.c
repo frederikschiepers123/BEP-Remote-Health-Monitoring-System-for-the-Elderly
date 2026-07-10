@@ -14,9 +14,17 @@ int json_encode_env(char *buf, size_t cap,
                     uint64_t ts_us, int64_t wall_ms, uint32_t seq, uint8_t q,
                     const JsonEnvBody *v)
 {
-    /* pres_hpa is null when the active env driver has no barometer (AHT21,
-     * §9.2.2): the field is always present per §9.2.3, but its value is the
-     * literal null rather than a number. */
+    /* hum_pct / pres_hpa are null when the active env driver can't measure them
+     * (pres on the AHT21, hum on the BMP280; §9.2.2): the field is always
+     * present per §9.2.3, but its value is the literal null rather than a
+     * number. */
+    char hum[16];
+    if (v->hum_valid) {
+        (void)snprintf(hum, sizeof(hum), "%.3f", (double)v->hum_pct);
+    } else {
+        (void)snprintf(hum, sizeof(hum), "null");
+    }
+
     char pres[16];
     if (v->pres_valid) {
         (void)snprintf(pres, sizeof(pres), "%.3f", (double)v->pres_hpa);
@@ -26,13 +34,13 @@ int json_encode_env(char *buf, size_t cap,
 
     return snprintf(buf, cap,
         "{\"ts_us\":%llu,\"wall_ms\":%lld,\"seq\":%lu,\"q\":%u,"
-        "\"v\":{\"temp_c\":%.3f,\"hum_pct\":%.3f,\"pres_hpa\":%s}}",
+        "\"v\":{\"temp_c\":%.3f,\"hum_pct\":%s,\"pres_hpa\":%s}}",
         (unsigned long long)ts_us,
         (long long)wall_ms,
         (unsigned long)seq,
         (unsigned)q,
         (double)v->temp_c,
-        (double)v->hum_pct,
+        hum,
         pres);
 }
 

@@ -132,7 +132,7 @@ static void ens160_task(void *arg)
 
 int main(void)
 {
-    /* See bme280_only.c — stdio_init_all() before the scheduler is what makes
+    /* See bmp280_only.c — stdio_init_all() before the scheduler is what makes
      * CDC enumeration reliable on this laptop / Windows. */
     stdio_init_all();
     (void)cyw43_arch_init();

@@ -8,13 +8,13 @@ env_driver_t *env_select_from_config(void) {
     CfgSensors cs;
     err_t e = cfg_load_sensors(&cs);
     if (e != ERR_OK) {
-        LOG_W("cfg_load_sensors failed (%ld) — defaulting to BME280", (long)e);
-        return env_bme280_driver();
+        LOG_W("cfg_load_sensors failed (%ld) — defaulting to BMP280", (long)e);
+        return env_bmp280_driver();
     }
     switch (cs.env) {
-    case CFG_ENV_BME280:  return env_bme280_driver();
+    case CFG_ENV_BMP280:  return env_bmp280_driver();
     case CFG_ENV_AHT21:   return env_aht21_driver();
     case CFG_ENV_DEFAULT:
-    default:              return env_bme280_driver();
+    default:              return env_bmp280_driver();
     }
 }

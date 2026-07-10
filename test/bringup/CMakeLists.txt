@@ -67,17 +67,17 @@ pico_enable_stdio_usb(bringup_provision 1)
 pico_enable_stdio_uart(bringup_provision 0)
 pico_add_extra_outputs(bringup_provision)
 
-# BME280 driver verification — no Wi-Fi, no MQTT. Inits I²C0, scans the bus,
-# initialises the BME280 and prints samples to PuTTY every second. Cleanest
+# BMP280 driver verification — no Wi-Fi, no MQTT. Inits I²C0, scans the bus,
+# initialises the BMP280 and prints samples to PuTTY every second. Cleanest
 # way to confirm sensor wiring + driver before involving the network stack.
-add_executable(bringup_bme280
-    bme280_only.c
-    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+add_executable(bringup_bmp280
+    bmp280_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/bmp280.c
 )
-target_include_directories(bringup_bme280 PRIVATE
-    ${CMAKE_SOURCE_DIR}/components/sensor_env   # bme280.h
+target_include_directories(bringup_bmp280 PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env   # bmp280.h
 )
-target_link_libraries(bringup_bme280 PRIVATE
+target_link_libraries(bringup_bmp280 PRIVATE
     board
     log
     pico_stdlib
@@ -87,11 +87,11 @@ target_link_libraries(bringup_bme280 PRIVATE
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
 )
-pico_enable_stdio_usb(bringup_bme280 1)
-pico_enable_stdio_uart(bringup_bme280 0)
-pico_add_extra_outputs(bringup_bme280)
+pico_enable_stdio_usb(bringup_bmp280 1)
+pico_enable_stdio_uart(bringup_bmp280 0)
+pico_add_extra_outputs(bringup_bmp280)
 
-# ENS160 driver verification — same shape as bringup_bme280.
+# ENS160 driver verification — same shape as bringup_bmp280.
 add_executable(bringup_ens160
     ens160_only.c
     ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
@@ -112,6 +112,109 @@ target_link_libraries(bringup_ens160 PRIVATE
 pico_enable_stdio_usb(bringup_ens160 1)
 pico_enable_stdio_uart(bringup_ens160 0)
 pico_add_extra_outputs(bringup_ens160)
+
+# AHT21-only I²C diagnostic — continuous timeout-bounded re-scan + read, no
+# network. Fastest way to isolate "does the AHT21 answer the bus" from PCB
+# pull-up/power/wiring problems. Runs at 100 kHz (see aht21_only.c).
+add_executable(bringup_aht21
+    aht21_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/aht21.c
+)
+target_include_directories(bringup_aht21 PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env
+)
+target_link_libraries(bringup_aht21 PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_aht21 1)
+pico_enable_stdio_uart(bringup_aht21 0)
+pico_add_extra_outputs(bringup_aht21)
+
+# AHT21 + ENS160 combined I²C diagnostic — continuous timeout-bounded re-scan +
+# read of both combo-board sensors (AHT21 temp/hum compensates the ENS160), no
+# network. Runs at 100 kHz (see aht21_ens160_only.c).
+add_executable(bringup_aht21_ens160
+    aht21_ens160_only.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/aht21.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+)
+target_include_directories(bringup_aht21_ens160 PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env
+    ${CMAKE_SOURCE_DIR}/components/sensor_air
+)
+target_link_libraries(bringup_aht21_ens160 PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_aht21_ens160 1)
+pico_enable_stdio_uart(bringup_aht21_ens160 0)
+pico_add_extra_outputs(bringup_aht21_ens160)
+
+# ENS160 decisive diagnostic — raw-I²C clone/power/driver discriminator: reads
+# the app FW version (GPR path) + polls DEVICE_STATUS after a single STANDARD
+# write with NO OPMODE re-kicking. No driver, no network. See ens160_diag.c.
+add_executable(bringup_ens160_diag ens160_diag.c)
+target_link_libraries(bringup_ens160_diag PRIVATE
+    board
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_ens160_diag 1)
+pico_enable_stdio_uart(bringup_ens160_diag 0)
+pico_add_extra_outputs(bringup_ens160_diag)
+
+# All-sensors BENCH tool — AHT21 + ENS160 + BH1750 (I²C) + MR60BHA2 radar
+# (UART) printed continuously with NO network. Verifies the full sensor set
+# without a broker/hotspot, unlike bringup_sensors which only prints I²C reads
+# after MQTT CONNACK. See sensors_bench.c.
+add_executable(bringup_bench
+    sensors_bench.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/aht21.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_light/bh1750.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar/radar_bha2.c
+)
+target_include_directories(bringup_bench PRIVATE
+    ${CMAKE_SOURCE_DIR}/components/sensor_env
+    ${CMAKE_SOURCE_DIR}/components/sensor_air
+    ${CMAKE_SOURCE_DIR}/components/sensor_light
+    ${CMAKE_SOURCE_DIR}/components/sensor_radar
+)
+target_link_libraries(bringup_bench PRIVATE
+    board
+    log
+    pico_stdlib
+    pico_stdio_usb
+    pico_cyw43_arch_none
+    hardware_i2c
+    hardware_uart
+    hardware_gpio
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_usb(bringup_bench 1)
+pico_enable_stdio_uart(bringup_bench 0)
+pico_add_extra_outputs(bringup_bench)
 
 # MR60BHA2 radar driver verification — UART on GP4/GP5.
 # Links the existing components/sensor_radar/radar_bha2.c directly (avoids
@@ -139,11 +242,11 @@ pico_enable_stdio_usb(bringup_radar 1)
 pico_enable_stdio_uart(bringup_radar 0)
 pico_add_extra_outputs(bringup_radar)
 
-# SH1106 OLED status pages with live BME280 + ENS160 readings.
+# SH1122 OLED status pages with live BMP280 + ENS160 readings.
 add_executable(bringup_oled
     oled_only.c
     ${CMAKE_SOURCE_DIR}/components/ui_oled/sh1122.c
-    ${CMAKE_SOURCE_DIR}/components/sensor_env/bme280.c
+    ${CMAKE_SOURCE_DIR}/components/sensor_env/bmp280.c
     ${CMAKE_SOURCE_DIR}/components/sensor_air/ens160.c
 )
 target_include_directories(bringup_oled PRIVATE
@@ -224,37 +327,6 @@ pico_enable_stdio_usb(bringup_wifi 1)
 pico_enable_stdio_uart(bringup_wifi 0)
 pico_add_extra_outputs(bringup_wifi)
 
-# Probe for the cyw43_arch + sys_freertos hang. Same code shape as
-# bringup_wifi but linked against pico_cyw43_arch_lwip_sys_freertos (the
-# production target per CLAUDE.md §2.1 / §7) and using the root lwipopts.h
-# (NO_SYS=0) — NOT the bringup-only override. See memory
-# project_cyw43_sys_freertos_hang for the prior diagnosis.
-add_executable(bringup_sys_freertos wifi_sysfree.c)
-target_link_libraries(bringup_sys_freertos PRIVATE
-    board
-    pico_stdlib
-    pico_stdio_usb
-    pico_cyw43_arch_lwip_sys_freertos
-    pico_mbedtls
-    pico_lwip_mbedtls
-    FreeRTOS-Kernel
-    FreeRTOS-Kernel-Heap4
-)
-foreach(_v WIFI_SSID WIFI_PSK)
-    if(NOT DEFINED ${_v} AND DEFINED ENV{${_v}})
-        set(${_v} "$ENV{${_v}}")
-    endif()
-endforeach()
-if(DEFINED WIFI_SSID)
-    target_compile_definitions(bringup_sys_freertos PRIVATE "WIFI_SSID=\"${WIFI_SSID}\"")
-endif()
-if(DEFINED WIFI_PSK)
-    target_compile_definitions(bringup_sys_freertos PRIVATE "WIFI_PSK=\"${WIFI_PSK}\"")
-endif()
-pico_enable_stdio_usb(bringup_sys_freertos 1)
-pico_enable_stdio_uart(bringup_sys_freertos 0)
-pico_add_extra_outputs(bringup_sys_freertos)
-
 # Step 6 — mTLS to broker + MQTT CONNECT + test publish.
 # Identity (UUID + cert chain) and config (Wi-Fi, broker) live in littlefs,
 # provisioned with bringup_provision + scripts/provision_device.py. Reflashing
@@ -283,7 +355,7 @@ pico_enable_stdio_uart(bringup_mqtt 0)
 pico_add_extra_outputs(bringup_mqtt)
 
 # ── Sensor publish bring-up — extends mqtt_connect with real sensor reads ──
-# Same TLS+MQTT path as bringup_mqtt; adds I²C bus init + BME280 + ENS160
+# Same TLS+MQTT path as bringup_mqtt; adds I²C bus init + BMP280 + ENS160
 # sampling + per-sensor topic publish (rmms/<uuid>/env, /air; /radar NYI).
 # Driver .c files are pulled in directly to avoid the per-sensor wrapper
 # libraries' FreeRTOS queue / app_config dependencies (those belong to
@@ -309,7 +381,7 @@ target_link_libraries(bringup_sensors PRIVATE
     storage
     identity
     cfg
-    sensor_env        # env_driver_t + BME280/AHT21 + env_select
+    sensor_env        # env_driver_t + BMP280/AHT21 + env_select
     sensor_light      # light_driver_t + BH1750/GL5516 + light_select
     pico_stdlib
     pico_stdio_usb

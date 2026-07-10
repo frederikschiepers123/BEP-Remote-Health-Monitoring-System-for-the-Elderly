@@ -27,9 +27,11 @@
 
 /* ── On-flash geometry ───────────────────────────────────────────────────── */
 
-#define SPOOL_MAGIC       0x524D5332u           /* "RMS2" — record-valid marker
-                                                  * (bumped: radar body layout
-                                                  * changed for resp_motion,
+#define SPOOL_MAGIC       0x524D5333u           /* "RMS3" — record-valid marker
+                                                  * (bumped: env body gained
+                                                  * humidity_valid for the BMP280
+                                                  * hum-null path; previously
+                                                  * bumped for resp_motion,
                                                   * ADR-0006)                     */
 #define SPOOL_SLOT_SIZE   FLASH_PAGE_SIZE        /* one record per flash page     */
 #define SPOOL_S           (FLASH_SECTOR_SIZE / SPOOL_SLOT_SIZE)   /* slots/sector */

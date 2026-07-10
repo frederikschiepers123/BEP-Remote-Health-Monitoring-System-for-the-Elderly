@@ -135,7 +135,7 @@ static void driver_task(void *arg)
 
 int main(void)
 {
-    /* Same init order as bme280_only — stdio + cyw43 before scheduler so
+    /* Same init order as bmp280_only — stdio + cyw43 before scheduler so
      * Windows CDC enumerates cleanly. */
     stdio_init_all();
     (void)cyw43_arch_init();

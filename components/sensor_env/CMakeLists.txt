@@ -1,6 +1,6 @@
 add_library(sensor_env STATIC
     sensor_env.c
-    bme280.c
+    bmp280.c
     aht21.c
     env_select.c
 )

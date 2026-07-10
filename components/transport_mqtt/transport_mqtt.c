@@ -530,8 +530,8 @@ static void ingest_env(void)
         (void)spool_push(&r);
     }
     if (have) {
-        ui_oled_set_env(m.v.temp_c, m.v.humidity_pct, m.v.pressure_hpa,
-                        m.v.pressure_valid, m.q);
+        ui_oled_set_env(m.v.temp_c, m.v.humidity_pct, m.v.humidity_valid,
+                        m.v.pressure_hpa, m.v.pressure_valid, m.q);
     }
 }
 
@@ -592,7 +592,8 @@ static int encode_record(const SpoolRecord *r, char *buf, size_t cap)
     case SPOOL_KIND_ENV: {
         JsonEnvBody b = { .temp_c = r->body.env.temp_c, .hum_pct = r->body.env.humidity_pct,
                           .pres_hpa = r->body.env.pressure_hpa,
-                          .pres_valid = r->body.env.pressure_valid };
+                          .pres_valid = r->body.env.pressure_valid,
+                          .hum_valid = r->body.env.humidity_valid };
         return json_encode_env(buf, cap, r->ts_us, r->wall_ms, r->seq, r->q, &b);
     }
     case SPOOL_KIND_AIR: {

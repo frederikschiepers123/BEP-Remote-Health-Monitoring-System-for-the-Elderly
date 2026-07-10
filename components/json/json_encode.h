@@ -28,6 +28,7 @@ typedef struct {
     float hum_pct;
     float pres_hpa;
     bool  pres_valid;    /* false → pres_hpa emitted as null (AHT21 path, §9.2.2) */
+    bool  hum_valid;     /* false → hum_pct emitted as null (BMP280 path, §9.2.2) */
 } JsonEnvBody;
 
 typedef struct {

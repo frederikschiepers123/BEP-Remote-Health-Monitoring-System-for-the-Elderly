@@ -183,7 +183,7 @@ static void board_hw_init(void)
      * proven bring-up (test/bringup/wifi_connect.c). */
 
     /*
-     * I²C0 (AHT21/BME280 + ENS160 + BH1750 + SH1122 OLED) is initialised by
+     * I²C0 (AHT21/BMP280 + ENS160 + BH1750 + SH1122 OLED) is initialised by
      * i2c_bus_init() in main(), which also creates the shared bus mutex —
      * one owner of the bus configuration (§7.2).
      *

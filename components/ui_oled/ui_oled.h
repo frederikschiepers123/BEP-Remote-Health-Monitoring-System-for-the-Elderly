@@ -65,9 +65,10 @@ void ui_oled_set_net(const char *ip, bool mqtt_ok);
  */
 void ui_oled_set_diag(const char *msg);
 
-/** Latest env sample.  pres_valid=false renders pressure as "—" (AHT21). */
-void ui_oled_set_env(float temp_c, float hum_pct, float pres_hpa,
-                     bool pres_valid, uint8_t q);
+/** Latest env sample.  pres_valid=false renders pressure as "P --" (AHT21);
+ *  hum_valid=false renders humidity as "H --" (BMP280). */
+void ui_oled_set_env(float temp_c, float hum_pct, bool hum_valid,
+                     float pres_hpa, bool pres_valid, uint8_t q);
 
 /** Latest air sample (AQI 1..5; 0 = warming up). */
 void ui_oled_set_air(uint16_t co2_ppm, uint16_t tvoc_ppb, uint8_t aqi,

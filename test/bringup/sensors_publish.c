@@ -3,7 +3,7 @@
  *
  * This is the supervisor-demo target: extends bringup_mqtt with real sensor
  * data. Each sensor lives behind a simple #ifdef so we can flip them on/off
- * as drivers come online: BME280 → rmms/<uuid>/env, ENS160 → /air,
+ * as drivers come online: BMP280/AHT21 → rmms/<uuid>/env, ENS160 → /air,
  * MR60BHA2 → /radar (NYI).
  *
  *   storage_mount() → identity_load() + cfg_load_wifi/broker() from littlefs
@@ -1171,7 +1171,7 @@ static void sensors_task(void *arg)
     i2c_scan();
 
 #if SENSOR_ENV_ON
-    /* Pick BME280 or AHT21 from /cfg/sensors.json (defaults to BME280). The
+    /* Pick BMP280 or AHT21 from /cfg/sensors.json (defaults to BMP280). The
      * driver names itself, so the log line works for either. */
     s_env = env_select_from_config();
     uint8_t env_addr = (s_env == env_aht21_driver())

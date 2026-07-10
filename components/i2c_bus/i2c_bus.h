@@ -3,7 +3,7 @@
 
 /* Shared I²C0 bus arbitration (CLAUDE.md §7.2, §13.5).
  *
- * Five firmware tasks touch I²C0: env_task (AHT21/BME280), air_task (ENS160),
+ * Five firmware tasks touch I²C0: env_task (AHT21/BMP280), air_task (ENS160),
  * light_task (BH1750), ui_task (SH1122 OLED).  The pico-sdk i2c_*_blocking
  * calls are NOT task-aware: if two tasks issue transactions concurrently under
  * SMP the byte streams interleave on the wire.  Observed symptoms (bench-

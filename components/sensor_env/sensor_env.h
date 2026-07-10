@@ -1,12 +1,14 @@
 #ifndef SENSOR_ENV_H
 #define SENSOR_ENV_H
 
-/* Environmental sensor task — temperature + humidity (+ pressure on BME280).
+/* Environmental sensor task — temperature, plus humidity (AHT21) or pressure
+ * (BMP280) depending on which part is populated.
  *
- * The concrete sensor (AHT21 or BME280) is selected at runtime from
+ * The concrete sensor (AHT21 or BMP280) is selected at runtime from
  * /cfg/sensors.json via the env_driver_t vtable (env_select.c); env_task is
- * unaware of which part is populated.  AHT21 leaves pressure_valid=false,
- * which the transport encodes as `"pres_hpa": null` (§9.2.2).
+ * unaware of which part is populated.  AHT21 leaves pressure_valid=false and
+ * BMP280 leaves humidity_valid=false, which the transport encodes as
+ * `"pres_hpa": null` / `"hum_pct": null` respectively (§9.2.2).
  *
  * Publishes EnvMsg to q_env at 1 Hz.  The transport_task drains q_env, stamps
  * the §9.2.1 envelope (ts_us/seq), and forwards the sample via MQTT.
@@ -30,7 +32,7 @@
  * ts_us/seq are stamped by the transport at publish time (§9.2.1). */
 
 typedef struct {
-    EnvSample v;            /* driver sample: temp/hum/pres + pressure_valid */
+    EnvSample v;            /* driver sample: temp/hum/pres + humidity_valid/pressure_valid */
     uint8_t   q;            /* 0=ok, 3=invalid (driver ERR_*) */
 } EnvMsg;
 
