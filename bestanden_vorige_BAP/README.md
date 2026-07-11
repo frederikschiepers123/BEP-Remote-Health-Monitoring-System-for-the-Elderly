@@ -1,3 +1,15 @@
+> **Previous BAP group's material — reference only.** This directory is an
+> unmodified copy of the 2025 group's repository (their own README follows
+> below; its folder names don't fully match — `sbc_software`/`sensor_module_software`
+> are `SBC`/`sensor_module` here). Their MicroPython firmware is a behavioural
+> spec, not a starting point, and their registration protocol was **audited and
+> deliberately replaced** — see the repo-root `docs/technical-audit.md` and
+> root `CLAUDE.md §1/§9.4` before reusing anything from here.
+>
+> The private keys the previous group committed (the audit's §D.1 finding)
+> have been **deleted from this copy**; treat any key material that ever
+> lived here as burned. Never reuse it.
+
 # Registering Medical Devices - Registering Medical Devices
 This is the README file for the registration protocol that is the result of the Bachelor's Graduation Project. 
 The contents of this module implement a protocol that can register different kinds of peripheral devices for a RMMS. In this README the contents of every software file will be described, as well as the workflow to register devices.
