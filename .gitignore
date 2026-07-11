@@ -47,3 +47,11 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
+
+# KiCad autosave/backup droppings (see PCB/README.md)
+_restore_backup_*/
+*.lck
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*-backups/
+*.bak

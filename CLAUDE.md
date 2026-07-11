@@ -34,11 +34,14 @@ The Android tablet serves **two roles simultaneously**:
    raw topics are the contract, and the mirror is one of several
    subscribers.
 
-This repository's **firmware** (the repo root: `main/`, `components/`, etc.) is
-the sensor-module firmware **only**. The tablet broker configuration, the
-MagicMirror² installation and `MMM-SensorUI` module, and the USB-MQTT bridge live
-in separate repositories (the MagicMirror² tree currently sits under
-`MagicMirror/` here as a temporary convenience; factor it out before v1).
+This file governs the **firmware** (the repo root: `main/`, `components/`,
+etc.) — but the repository is a **monorepo** holding every tier. Companion
+docs, in authority order below this file: `docs/CLAUDE_tablet.md` (tablet
+tier: broker, MagicMirror² + `MMM-SensorUI`, autostart), `sbc/CLAUDE.md`
+(SBC/FHIR tier), `docs/handover.md` (hardware-verification status + known
+gotchas), `docs/provisioning.md` (CA + device provisioning), `DEMO.md`
+(end-to-end demo runbook), and the root `README.md` (repo map + reading
+order). There is no USB-MQTT bridge (ADR-0002).
 
 The **Radxa aggregation service + FHIR translator** now lives **in this monorepo
 under `sbc/`** — a standalone Python project (its own `sbc/CLAUDE.md`) that the
@@ -232,7 +235,7 @@ parsed `RadarSample`.
 - Always-on, no battery, no sleep modes in the v1 firmware.
 
 ### 3.4 Pin map
-Authoritative pin assignments live in `include/board_pico2wh.h`. Do not hardcode
+Authoritative pin assignments live in `components/board/board_pico2wh.h`. Do not hardcode
 GPIO numbers anywhere else. PCB layout owns this file in spirit — the firmware
 reads it.
 
@@ -280,13 +283,13 @@ cmake -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug ..
 # Build
 cmake --build . -j$(nproc)
 
-# Flash via BOOTSEL (hold BOOTSEL while plugging in, then):
-cp sensor_module.uf2 /run/media/$USER/RP2350/
+# Flash via BOOTSEL (hold BOOTSEL while plugging in, then; artifact is under main/):
+cp main/sensor_module.uf2 /run/media/$USER/RP2350/
 
 # Flash via SWD (picoprobe attached):
 openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg \
         -c "adapter speed 5000" \
-        -c "program sensor_module.elf verify reset exit"
+        -c "program main/sensor_module.elf verify reset exit"
 
 # Live logs (stdio over CDC1 — see §12)
 minicom -D /dev/ttyACM1 -b 115200
@@ -345,7 +348,10 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │
 ├── test/
 │   ├── host/                     # native unit tests (CMocka)
-│   └── hil/                      # hardware-in-the-loop scripts
+│   └── bringup/                  # standalone bring-up/diagnostic firmware images
+│                                 #   (incl. bringup_sensors, the hardware-proven
+│                                 #   demo image — see DEMO.md; §14.2's HIL harness
+│                                 #   is aspirational, no test/hil/ exists)
 │
 └── docs/
     ├── adr/                      # architecture decision records
@@ -531,6 +537,7 @@ from registration. **No spaces, no Dutch diacritics, no PII in topics.**
 | `rmms/<uuid>/light`                | pub       | JSON light sample | 1 |
 | `rmms/<uuid>/status`               | pub (retained) | `"online"`/`"offline"` | 1 |
 | `rmms/<uuid>/cmd`                  | sub       | JSON command    | 1   |
+| `rmms/<uuid>/time/set`             | sub       | `{"epoch_ms":…}` wall-clock sync (§9.2.5, ADR-0003) | 1 |
 | `rmms/<uuid>/log`                  | pub       | text log line   | 0   |
 
 **Downlink topics** that live in the per-device tree but are **not** handled
@@ -797,8 +804,10 @@ is required before any deployment beyond the project review.
 **Mirror identity:** the mirror is a distinct MQTT client with its own
 cert (CN format `mirror-<short-id>`), issued by the project CA by
 `scripts/provision_ca.sh` alongside the device cert. The Mosquitto ACL
-grants the mirror role `topic read rmms/+/+` (read everything in the
-device-rooted tree). The mirror does not publish sensor topics.
+grants the mirror role read access to everything in the device-rooted tree
+(as-built: `topic read rmms/#`, which also covers 3-level topics like
+`time/set` — see `scripts/provision_ca.sh`). The mirror does not publish
+sensor topics.
 
 **Operator identity:** the PoC laptop (and, eventually, the Radxa relay
 for hospital-sourced messages) uses an `operator-<short-id>` cert with
@@ -809,8 +818,8 @@ else.
 - The firmware publishes **only** the raw topics listed in §9.1
   (`env`, `air`, `radar`, `light`, `status`, `log`). It does not publish
   `info`, `screen`, or anything in a `ui` namespace (none exists).
-- The firmware subscribes **only** to `rmms/<uuid>/cmd` (plus
-  `rmms/<uuid>/time/set` when §16 Q6 is resolved).
+- The firmware subscribes **only** to `rmms/<uuid>/cmd` and
+  `rmms/<uuid>/time/set` (§8.3, ADR-0003 — §16 Q6 is resolved).
 - The Radxa never touches the mirror UI. Its v1 jobs are raw-vitals
   aggregation, store-and-forward buffering, and FHIR translation
   (§9.6); in deployment it will additionally relay hospital-sourced
@@ -985,7 +994,7 @@ mapping, and the server-side update-or-ignore requirement — is documented in
   `scripts/provision_ca.sh`, for consumers and operators of the topic tree
   (the firmware never sees these — they live only on consuming hosts):
   - **Mirror cert** (CN `mirror-<short-id>`): used by MagicMirror²'s MQTT
-    bridge module to subscribe to the device tree. Mosquitto ACL: `topic read rmms/+/+`.
+    bridge module to subscribe to the device tree. Mosquitto ACL: `topic read rmms/#` (as generated by `provision_ca.sh`).
   - **Operator cert** (CN `operator-<short-id>`): used by the PoC laptop (and,
     eventually, by the Radxa relay) to publish the downlink topics `info` and
     `screen`. Mosquitto ACL: `topic write rmms/+/info`, `topic write rmms/+/screen`,
@@ -1339,10 +1348,15 @@ Resolve each, then strip the TODO.
    re-signing if a device cert is lost or compromised? **The audit shows the
    previous group committed an unencrypted CA private key to the repo — this
    must not recur.** Document the operational procedure before first
-   provisioning run.
+   provisioning run. *(Operationally answered: the CA lives in `~/rmms-ca/`
+   on the provisioning workstation; custody/transfer procedure in
+   `docs/provisioning.md §4`. Fold in as resolved once the CA transfer to
+   the next group actually happens — `docs/handover.md`.)*
 8. **Cert lifetimes.** Device certs need an expiry date. 1 year? 5 years? The
    shorter the more frequent re-provisioning; the longer the more damage from
-   a compromise. Recommend 2 years for v1; revisit for v2.
+   a compromise. Recommend 2 years for v1; revisit for v2. *(Implemented as
+   recommended: `LEAF_DAYS=730`, CA 10 years — `scripts/provision_ca.sh`,
+   `docs/provisioning.md`.)*
 9. ~~**Mosquitto ACL pattern verification.**~~ **Resolved.** The Termux
    Mosquitto build enforces the ACL as intended. The broker uses
    `use_identity_as_username true` with `pattern write rmms/%u/#` /

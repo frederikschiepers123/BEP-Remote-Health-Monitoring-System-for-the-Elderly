@@ -48,7 +48,7 @@ Flash via BOOTSEL:
 
 ```bash
 # Hold BOOTSEL while plugging in USB, then:
-cp build/sensor_module.uf2 /run/media/$USER/RP2350/
+cp build/main/sensor_module.uf2 /run/media/$USER/RP2350/
 ```
 
 Flash via SWD (picoprobe attached):
@@ -56,7 +56,7 @@ Flash via SWD (picoprobe attached):
 ```bash
 openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg \
         -c "adapter speed 5000" \
-        -c "program build/sensor_module.elf verify reset exit"
+        -c "program build/main/sensor_module.elf verify reset exit"
 ```
 
 **Pass:** onboard LED blinks at 1 Hz.
@@ -177,7 +177,7 @@ The plausibility/median/breath-hold post-processing on top of the driver is
 **Goal:** the same firmware drives the Waveshare HMMD (24 GHz) module with no
 rebuild — just a config flag. Only relevant on a board populated with the HMMD
 part. Protocol is the previous group's reference driver
-(`bestanden_vorige_BAP/.../lib/hmmd_mpy.py`, CLAUDE.md §18): `F4 F3 F2 F1`
+(`bestanden_vorige_BAP/.../lib/hmmd_mpy.py` — tree removed at handover, retrieve from pre-July-2026 git history; CLAUDE.md §18): `F4 F3 F2 F1`
 header, LE length, `presence + distance + 16 gate energies`, `F8 F7 F6 F5` tail,
 no checksum. `init` sends the Report-Mode command first.
 

@@ -25,7 +25,7 @@ Two facts make a second radar concrete now:
    cannot actually run this firmware.
 
 2. The previous BAP group shipped a **working MicroPython HMMD driver**
-   (`bestanden_vorige_BAP/sensor_module/microcontroller_files/lib/hmmd_mpy.py`),
+   (`bestanden_vorige_BAP/sensor_module/microcontroller_files/lib/hmmd_mpy.py` — tree removed at handover; in pre-July-2026 git history),
    which CLAUDE.md §18 designates the behavioural specification. It pins the
    exact module (**Waveshare HMMD**, "Report Mode") and its wire protocol, so
    the C port is a faithful translation, not a guess.
@@ -116,4 +116,4 @@ The HMMD module reuses the shared radar UART (`BOARD_RADAR_*`, uart1, 115200) �
 - Config schema: `components/cfg/cfg.{h,c}` — `CFG_RADAR_HMMD`
 - Host tests: `test/host/test_radar_hmmd.c` (registered in `run.sh` + `CMakeLists.txt`)
 - Bring-up: `docs/bring_up.md` step 7b (HMMD variant + selection)
-- Behavioural reference: `bestanden_vorige_BAP/.../lib/hmmd_mpy.py` (CLAUDE.md §18)
+- Behavioural reference: `bestanden_vorige_BAP/.../lib/hmmd_mpy.py` (CLAUDE.md §18; tree removed at handover — pre-July-2026 git history)

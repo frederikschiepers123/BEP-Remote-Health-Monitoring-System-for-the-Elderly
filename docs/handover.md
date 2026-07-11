@@ -18,7 +18,7 @@ time. Architecture questions belong in `CLAUDE.md`; this file is about state.
   pulse oximeter.
 - **SH1122 OLED** — driver + 7-page render path, used in every demo.
 - **Broker ACL** — `scripts/test_broker_acl.sh`: 7/7 assertions against the
-  live tablet broker (`CLAUDE.md §16 Q9`); evidence in `docs/report/`.
+  live tablet broker (`CLAUDE.md §16 Q9`); evidence: `docs/report/evidence_mqtt_mtls.md` + the captured logs in `docs/report/mqtt_mtls_proof/`.
 - **Tablet self-heal** — reboot-proof stack via Termux:Boot →
   `scripts/tablet_boot.sh` (broker, sshd, MagicMirror, wake app), IP-independent
   thanks to mDNS (`tablet.local`).

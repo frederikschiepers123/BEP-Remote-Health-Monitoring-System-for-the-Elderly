@@ -33,6 +33,7 @@ same topics.
 
 | Path | What it is |
 |---|---|
+| `CLAUDE.md`, `DEMO.md` | The architecture contract and the end-to-end demo runbook (see reading order above / quickstarts below). |
 | `main/`, `components/` | **Pico 2 W firmware** (C11; pico-sdk + FreeRTOS + lwIP/mbedTLS + littlefs). One component per concern — layout in `CLAUDE.md §6`. |
 | `test/host/` | Native unit tests (CMocka) for driver logic — `bash test/host/run.sh`. |
 | `test/bringup/` | Standalone bring-up/diagnostic firmware images (blink → sensors → Wi-Fi → mTLS → full bench). `bringup_sensors` is the demo image. |
@@ -49,6 +50,12 @@ same topics.
 | `lasercutting_files/` | Enclosure/acrylic lasercutting files (DXF + Fusion 360). |
 | `PCB/` | This group's KiCad PCB design files + bench measurements (buck converter scope shots). |
 | `Readout Code HMMD-MR60BHA2 and BMP/` | Standalone sensor-readout experiments (radar filtering tests, BMP readout) used during bring-up — not part of the production firmware. |
+
+**Local / generated directories (never in git):** `build*/` are CMake output
+trees; `out/` is provisioning output created by `scripts/provision_ca.sh` —
+it holds device/broker/mirror certificate bundles **including private keys**
+and must never be committed (it is gitignored; see `docs/provisioning.md`).
+On a fresh clone neither exists until you build/provision.
 
 The **previous BAP group's material** (`bestanden_vorige_BAP/`) was removed
 from the tree during handover cleanup — it is reference-only and available in
@@ -103,6 +110,7 @@ Full install/run/prove-the-FHIR-output walkthrough: `sbc/RUNBOOK.md`.
 
 ### End-to-end demo
 
+Full session procedure: **[`DEMO.md`](DEMO.md)**. In short:
 `scripts/demo_start.sh <tablet-ip>` starts a demo session; a provisioned Pico
 running `bringup_sensors.uf2` publishes live sensor data and the mirror renders
 it. Networking caveats (use a phone hotspot, not eduroam; keep the tablet
