@@ -26,6 +26,7 @@ certs/
 # IDE / OS
 .vscode/settings.json
 .idea/
+.history/
 *.DS_Store
 Thumbs.db
 
