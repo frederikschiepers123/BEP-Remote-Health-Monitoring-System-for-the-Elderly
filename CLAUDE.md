@@ -1443,7 +1443,9 @@ State these explicitly so reviewers stop asking:
   Behavioural reference for sensor protocols (BME280, HMMD) and the
   4-page OLED UI concept. **Not authoritative on registration, security, or
   architecture.** *Not committed to this repo* (ask the supervisor); the
-  previous group's code and PCB files are under `bestanden_vorige_BAP/`.
+  previous group's code and PCB files were under `bestanden_vorige_BAP/`,
+  removed from the tree at handover — retrievable from git history
+  (pre-July-2026 commits).
 - `BAP_Protocol_Thesis2.pdf` — parallel team's QR-code / camera-LED
   enrollment protocol design. **Historical only — not implemented in this
   firmware.** Retained for context on what the system used to do. *Not

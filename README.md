@@ -39,7 +39,7 @@ same topics.
 | `docs/` | System docs: bring-up procedure, MQTT topic contract, pin map, ADRs, provisioning, handover, technical audit of the previous group's code. |
 | `scripts/` | Operational scripts: build, CA + device provisioning, tablet deploy/boot, demo startup, broker ACL test. Index: `scripts/README.md`. |
 | `sbc/` | **SBC aggregator** — standalone Python project (own README, RUNBOOK, CLAUDE.md, tests). Never compiled into the firmware. |
-| `MagicMirror/` | Vendored upstream MagicMirror² tree. Project work lives only in `modules/MMM-SensorUI/`, `modules/MMM-CustomMQTTBridge/`, `css/`, `config/` (the live `config.js` holds LAN specifics, is gitignored, and lives on the tablet). |
+| `MagicMirror/` | Vendored upstream MagicMirror² tree (see its README). Project work lives only in `modules/MMM-SensorUI/`, `modules/MMM-CustomMQTTBridge/`, `css/`, `config/` — the live `config.js` holds LAN specifics, is gitignored, and lives on the tablet; `config/config.custom.sample.js` is a UI-only starter. |
 | `HealthMonitorWakeTest/` | **Android wake app** (Android Studio project): radar presence ↔ tablet screen on/off via the localhost MQTT listener (ADR-0004). See its README. |
 | `apk/` | Prebuilt APK of the wake app. |
 | `fully/` | Exported settings for the optional Fully Kiosk Browser (mirror kiosk mode). |
@@ -47,7 +47,15 @@ same topics.
 | `documents_and_diagrams/` | Thesis report, defense presentation, system diagrams. |
 | `papers/` | Reference papers + the complete reference list. |
 | `lasercutting_files/` | Enclosure/acrylic lasercutting files (DXF + Fusion 360). |
-| `bestanden_vorige_BAP/` | **Previous BAP group's material — reference only.** Their MicroPython code is a behavioural spec, not a starting point; their registration protocol was audited (`docs/technical-audit.md`) and deliberately replaced (`CLAUDE.md §9.4`). |
+| `PCB/` | This group's KiCad PCB design files + bench measurements (buck converter scope shots). |
+| `Readout Code HMMD-MR60BHA2 and BMP/` | Standalone sensor-readout experiments (radar filtering tests, BMP readout) used during bring-up — not part of the production firmware. |
+
+The **previous BAP group's material** (`bestanden_vorige_BAP/`) was removed
+from the tree during handover cleanup — it is reference-only and available in
+git history (any pre-July-2026 commit). Their registration protocol was
+audited (`docs/technical-audit.md`) and deliberately replaced
+(`CLAUDE.md §9.4`); their committed private keys are burned — never reuse
+anything cryptographic from that tree.
 
 ## Quickstart per tier
 
