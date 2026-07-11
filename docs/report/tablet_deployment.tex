@@ -1,0 +1,140 @@
+% ============================================================================
+% Tablet Deployment — report section + appendix
+% ----------------------------------------------------------------------------
+% Preamble requirement: \usepackage{listings}
+% MagicMirror^2 uses \textsuperscript{2} (swap for $^2$ if your template prefers).
+%
+% This file contains TWO blocks:
+%   1. MAIN TEXT  — a short \subsection for the body of the report.
+%   2. APPENDIX   — the detailed procedure; place it after \appendix.
+% The cross-reference resolves automatically once both are included.
+% ============================================================================
+
+
+% ============================== 1. MAIN TEXT ================================
+\subsection{Tablet Deployment Script}
+\label{sec:tablet-deployment}
+
+The tablet --- which hosts both the system's MQTT broker and the
+MagicMirror\textsuperscript{2} interface --- is provisioned by a single on-device
+script (\texttt{deploy.sh}) that installs the broker, the
+MagicMirror\textsuperscript{2} interface and the supporting services, and registers
+them to start automatically whenever the tablet boots. A second, short step run
+from the workstation then delivers the tablet's mutual-TLS certificates, which for
+security reasons are never generated on the device itself. The full procedure and
+its design rationale are described in Appendix~\ref{app:tablet-deploy}.
+
+
+% ============================== 2. APPENDIX =================================
+% Place this after \appendix in your report.
+\section{Tablet Deployment Procedure}
+\label{app:tablet-deploy}
+
+Provisioning the tablet is more involved than a conventional Linux service
+installation for two reasons. First, Android is a difficult host for unattended
+background services: it has no service manager, applies aggressive power management
+(Doze), and may terminate background processes under memory pressure. Second, the
+system's security model forbids the project's certificate-authority (CA) private
+key from ever residing on the tablet. The procedure below is shaped by these two
+constraints.
+
+\subsection{A two-stage procedure}
+
+Provisioning is split into an on-device stage and a workstation stage. The
+on-device stage is a single, idempotent script (\texttt{deploy.sh}) run once inside
+Termux from a clone of the project repository; it installs and configures
+everything that can be done locally on the tablet. The workstation stage then runs
+from the developer laptop and pushes the tablet's mutual-TLS identity --- its broker
+and mirror certificates together with the broker configuration --- onto the device
+over SSH. This split follows directly from the security model: the CA private key
+is the root of trust for the entire device fleet, so it must not be placed on an
+always-on, physically accessible tablet. The tablet therefore receives only its own
+leaf certificates and the public CA certificate, and the on-device script handles
+no secret material.
+
+\subsection{On-device provisioning (\texttt{deploy.sh})}
+
+The script is idempotent (safe to re-run) and performs the following:
+\begin{enumerate}
+  \item Requests storage access and updates the Termux package index.
+  \item Installs the required packages:
+    \begin{itemize}
+      \item \textbf{Git, Node.js} --- MagicMirror\textsuperscript{2} and its installer;
+      \item \textbf{Mosquitto} --- the MQTT broker;
+      \item \textbf{OpenSSH} --- remote access for the workstation stage;
+      \item \textbf{Python} with the \texttt{zeroconf} and \texttt{paho-mqtt}
+            libraries --- the mDNS responder and the presence-to-screen bridge;
+      \item the \textbf{Termux:API} tools --- the wake-lock and the commands used
+            to launch the kiosk browser.
+    \end{itemize}
+  \item Installs MagicMirror\textsuperscript{2} and the MQTT-client dependency of
+        the custom bridge module. Because the script runs from a Git checkout,
+        MagicMirror's installer --- which performs a clean-up step and fetches its
+        bundled front-end assets --- completes correctly.
+  \item Copies the runtime scripts into place and installs \texttt{tablet\_boot.sh}
+        as the Termux:Boot hook.
+  \item Starts the SSH daemon and prints the tablet's address together with the
+        command to run on the workstation.
+  \item Stages the kiosk-browser configuration and the companion Android
+        application in the Downloads folder for installation.
+\end{enumerate}
+Until the certificates are delivered by the workstation stage, the mirror interface
+loads but the broker remains down; this is intentional, as the broker cannot start
+without its key material and the system does not fall back to an insecure mode.
+
+\subsection{Self-healing autostart (\texttt{tablet\_boot.sh})}
+
+Because Android offers no service manager, persistence is achieved with the
+\emph{Termux:Boot} add-on, which runs a hook script after the device boots and is
+first unlocked. On each boot the hook executes, in order: acquire a wake-lock (to
+survive Doze); wait for Wi-Fi association; start the SSH daemon; start Mosquitto
+(once its certificates are present); start the mDNS responder; start the
+presence-to-screen bridge; and start MagicMirror\textsuperscript{2} with its kiosk
+viewer. Each service is guarded so that re-running the hook never starts a
+duplicate, and the mirror launcher restarts the interface with exponential back-off
+on failure, so the tablet recovers from a reboot or power interruption without
+intervention.
+
+\subsection{Network-independent broker discovery}
+
+The sensor modules must locate the broker without hard-coded addresses, as the home
+network assigns IP addresses dynamically. The tablet advertises itself over
+multicast DNS under the stable name \texttt{tablet.local}; each sensor module is
+provisioned once with this name and resolves the current address at every
+connection. The installation therefore tolerates address changes and network moves
+without any re-provisioning of the sensor devices.
+
+\subsection{Manual steps (Android restrictions)}
+
+A few actions cannot be automated because of Android's security model and must be
+performed once by the installer:
+\begin{itemize}
+  \item Disable battery optimisation for Termux (otherwise Doze suspends the services).
+  \item Install the Termux:Boot add-on (from F-Droid).
+  \item Unlock the device once after boot to arm the hook (it fires only after the
+        first unlock).
+  \item Import the kiosk-browser configuration and install the companion
+        application when Android prompts.
+\end{itemize}
+
+\subsection{Summarised procedure}
+
+\begin{lstlisting}[
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  captionpos=b,
+  caption={Tablet deployment commands.},
+  label={lst:tablet-deploy}]
+On the tablet (once, in Termux):
+  1.  pkg install -y git
+  2.  git clone <repository-url>
+  3.  cd <repository> && ./deploy.sh
+
+On the workstation (once):
+  4.  scripts/setup_tablet_ssh.sh        <tablet-ip>
+  5.  scripts/deploy_home_kit.sh tablet  <home-id> <tablet-ip>
+
+Manual Android steps (once): disable battery optimisation for Termux,
+install Termux:Boot, unlock after boot, import the kiosk configuration.
+\end{lstlisting}

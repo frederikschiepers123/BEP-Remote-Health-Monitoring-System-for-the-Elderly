@@ -61,7 +61,7 @@ void env_task(void *arg)
 {
     (void)arg;
 
-    /* Select AHT21/BME280 from /cfg/sensors.json (defaults to BME280). */
+    /* Select AHT21/BMP280 from /cfg/sensors.json (defaults to BMP280). */
     s_drv = env_select_from_config();
     if (s_drv == NULL) {
         LOG_E("env_select_from_config() returned NULL — env_task halting");
@@ -70,7 +70,7 @@ void env_task(void *arg)
 
     /* Each driver knows its own fixed/strapped address. */
     uint8_t addr = (s_drv == env_aht21_driver())
-                       ? BOARD_AHT21_ADDR : BOARD_BME280_ADDR;
+                       ? BOARD_AHT21_ADDR : BOARD_BMP280_ADDR;
 
     i2c_bus_lock();
     err_t err = s_drv->init(s_drv->ctx, BOARD_I2C_INST, addr);
@@ -95,7 +95,10 @@ void env_task(void *arg)
         if (err == ERR_OK) {
             msg.q = 0;
             s_last_temp_c  = msg.v.temp_c;
-            s_last_hum_pct = msg.v.humidity_pct;
+            /* BMP280 has no humidity sensor (humidity_valid=false, field 0.0);
+             * feeding RH_IN=0% would skew the ENS160's eCO2/AQI. Use the
+             * chip's datasheet-default 50% instead of the invalid reading. */
+            s_last_hum_pct = msg.v.humidity_valid ? msg.v.humidity_pct : 50.0f;
             s_last_valid   = true;
             LOG_D("env %s T=%.2fC H=%.2f%%%s", s_drv->name,
                   (double)msg.v.temp_c, (double)msg.v.humidity_pct,
@@ -105,6 +108,7 @@ void env_task(void *arg)
             msg.q = 3;   /* invalid — receiver must not use v */
             msg.v.temp_c = msg.v.humidity_pct = msg.v.pressure_hpa = 0.0f;
             msg.v.pressure_valid = false;
+            msg.v.humidity_valid = false;
         }
 
         if (xQueueSendToBack(q_env, &msg, 0) != pdTRUE) {

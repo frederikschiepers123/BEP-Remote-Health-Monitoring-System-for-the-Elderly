@@ -51,7 +51,7 @@ build_run() {
 
 FAIL=0
 echo "=== host unit tests ==="
-build_run test_sensor_env test_sensor_env.c "$REPO/components/sensor_env/bme280.c"
+build_run test_sensor_env test_sensor_env.c "$REPO/components/sensor_env/bmp280.c"
 build_run test_aht21      test_aht21.c      "$REPO/components/sensor_env/aht21.c"
 build_run test_bh1750     test_bh1750.c     "$REPO/components/sensor_light/bh1750.c"
 build_run test_ens160     test_ens160.c     "$REPO/components/sensor_air/ens160.c"

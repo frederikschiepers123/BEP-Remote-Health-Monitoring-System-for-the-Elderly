@@ -89,13 +89,20 @@ err_t cfg_load_sensors(CfgSensors *out) {
     else if (strcmp(kind, "hmmd") == 0) out->radar = CFG_RADAR_HMMD;
     else { LOG_E("sensors.json: unknown radar '%s'", kind); return ERR_INVALID_ARG; }
 
-    /* `env` is optional; absent means BME280 (back-compat with existing
-     * provisioned devices that pre-date the AHT21 footprint). */
+    /* `env` is optional; absent means BMP280 (the default-populated env part,
+     * back-compat with provisioned devices that pre-date the AHT21 footprint). */
     char env[16];
     out->env = CFG_ENV_DEFAULT;
     if (json_get_string(buf, toks, n, "env", env, sizeof(env)) == ERR_OK) {
-        if      (strcmp(env, "bme280") == 0) out->env = CFG_ENV_BME280;
+        if      (strcmp(env, "bmp280") == 0) out->env = CFG_ENV_BMP280;
         else if (strcmp(env, "aht21")  == 0) out->env = CFG_ENV_AHT21;
+        else if (strcmp(env, "bme280") == 0) {
+            /* Legacy alias: devices provisioned before the part was identified
+             * as a BMP280 (chip ID 0x58) carry "bme280" in sensors.json. Same
+             * driver either way; keep them booting without re-provisioning. */
+            LOG_W("sensors.json: legacy env 'bme280' -> bmp280");
+            out->env = CFG_ENV_BMP280;
+        }
         else { LOG_E("sensors.json: unknown env '%s'", env); return ERR_INVALID_ARG; }
     } else {
         snprintf(env, sizeof(env), "(default)");

@@ -48,7 +48,7 @@ function(add_host_test name driver)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
-add_host_test(test_sensor_env  components/sensor_env/bme280.c)     # BME280 compensation
+add_host_test(test_sensor_env  components/sensor_env/bmp280.c)     # BMP280 compensation
 add_host_test(test_aht21       components/sensor_env/aht21.c)      # AHT21/AHT20 decode
 add_host_test(test_bh1750      components/sensor_light/bh1750.c)   # BH1750 lux conversion
 add_host_test(test_ens160      components/sensor_air/ens160.c)     # ENS160 validity + decode

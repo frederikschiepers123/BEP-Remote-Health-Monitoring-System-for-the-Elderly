@@ -12,7 +12,7 @@
 #include "hardware/i2c.h"
 #include "hardware/uart.h"
 
-/* ── I²C0 — BME280 + ENS160 + SH1106 OLED ───────────────────────────────── */
+/* ── I²C0 — BMP280 + ENS160 + SH1122 OLED ───────────────────────────────── */
 #define BOARD_I2C_INST          i2c0
 #define BOARD_I2C_SDA_PIN       8     /* GP8, pin 11 */
 #define BOARD_I2C_SCL_PIN       9     /* GP9, pin 12 */
@@ -24,14 +24,15 @@
 #define BOARD_I2C_FREQ_HZ       400000U
 #endif
 
-#define BOARD_BME280_ADDR       0x76U   /* SDO low; 0x77 if SDO high */
+#define BOARD_BMP280_ADDR       0x76U   /* SDO low; 0x77 if SDO high */
 #define BOARD_AHT21_ADDR        0x38U   /* AHT21 has a fixed I²C address */
 #define BOARD_ENS160_ADDR       0x53U   /* default; 0x52 if ADDR pin pulled low */
 #define BOARD_OLED_ADDR         0x3CU   /* SA0 low; 0x3D if SA0 high */
 #define BOARD_BH1750_ADDR       0x23U   /* default; 0x5C if ADDR pin pulled high */
 
-/* ── UART1 — mmWave radar (shared UART for MR60BHA2 OR C1001; selection
- *           via /cfg/sensors.json per §3.2 / §7.4) ─────────────────────── */
+/* ── UART1 — mmWave radar (shared UART for the MR60BHA2 OR the 24 GHz HMMD
+ *           module; selection via /cfg/sensors.json per §3.2 / §7.4 /
+ *           ADR-0007 — the HMMD variant reuses this UART, no new pins) ──── */
 /* GP4/GP5 are UART1 on RP2350. The hardware perspective: MCU TX = GP5,
  * MCU RX = GP4. */
 #define BOARD_RADAR_UART_INST   uart1
@@ -56,8 +57,10 @@
 
 /* ── GPIO — LEDs ──────────────────────────────────────────────────────────── */
 /* CYW43 onboard LED is driven via pico_cyw43_arch (not a bare GPIO). */
-#define BOARD_LED_POWER_PIN     14    /* GP14, pin 19 — "system on" indicator */
-#define BOARD_LED_WIFI_PIN      15    /* GP15, pin 20 — "wifi associated" indicator */
+/* POWER/WIFI swapped 2026-06-22 to match the as-built PCB (LEDs were wired to
+ * the opposite pins vs the original assignment). */
+#define BOARD_LED_POWER_PIN     15    /* GP15, pin 20 — "system on" indicator */
+#define BOARD_LED_WIFI_PIN      14    /* GP14, pin 19 — "wifi associated" indicator */
 
 /* ── ADC0 — GL5516 LDR (generic module variant only; advanced module leaves
  *           this pin unpopulated, BH1750 over I²C handles light there) ──── */

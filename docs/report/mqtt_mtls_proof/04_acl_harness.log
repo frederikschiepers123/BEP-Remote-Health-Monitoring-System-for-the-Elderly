@@ -1,0 +1,10 @@
+=== broker ACL harness vs 127.0.0.1:8883 (device=52295a51-1a2d-4b2f-bedd-dacbbc1685f0) ===
+  [1;32mPASS[0m  A device publishes to its own subtree (allowed)
+  [1;32mPASS[0m  B device publish to other device subtree blocked (denied)
+  [1;32mPASS[0m  C operator publishes to /info (allowed)
+  [1;32mPASS[0m  D operator publish to /env blocked (denied)
+  [1;32mPASS[0m  E device reads its own /cmd (allowed)
+  [1;32mPASS[0m  F device cannot read other device topics (denied)
+  [1;32mPASS[0m  G broker refuses connections without a client cert
+
+=== 7 passed, 0 failed ===

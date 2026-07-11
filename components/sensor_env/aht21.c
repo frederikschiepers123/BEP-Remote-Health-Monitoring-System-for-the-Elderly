@@ -3,6 +3,7 @@
 
 #include "aht21.h"
 #include "err.h"
+#include "sensor_cal.h"
 
 /* FreeRTOS + pico headers resolve to the kernel/SDK on target and to
  * test/host/stubs on the host unit-test build (see test/host/). */
@@ -117,8 +118,8 @@ err_t aht21_read_sample(Aht21 *dev, Aht21Sample *out) {
                       | ((uint32_t)raw[4] << 8)
                       | (uint32_t)raw[5];
 
-    out->humidity_pct = ((float)hum_raw  / 1048576.0f) * 100.0f;
-    out->temp_c       = ((float)temp_raw / 1048576.0f) * 200.0f - 50.0f;
+    out->humidity_pct = ((float)hum_raw  / 1048576.0f) * 100.0f + CAL_ENV_HUM_DELTA_PCT;
+    out->temp_c       = ((float)temp_raw / 1048576.0f) * 200.0f - 50.0f + CAL_ENV_TEMP_DELTA_C;
     return ERR_OK;
 }
 
@@ -137,6 +138,7 @@ static err_t aht21_drv_read(void *ctx, EnvSample *out) {
     if (e != ERR_OK) return e;
     out->temp_c         = s.temp_c - ENV_TEMP_SELF_HEAT_OFFSET_C;
     out->humidity_pct   = s.humidity_pct;
+    out->humidity_valid = true;
     out->pressure_hpa   = 0.0f;
     out->pressure_valid = false;
     return ERR_OK;

@@ -1,0 +1,5 @@
+Client null sending CONNECT
+Client null received CONNACK (0)
+Client null sending PUBLISH (d0, q1, r0, m1, 'rmms/52295a51-1a2d-4b2f-bedd-dacbbc1685f0/env', ... (113 bytes))
+Client null received PUBACK (Mid: 1, RC:0)
+Client null sending DISCONNECT

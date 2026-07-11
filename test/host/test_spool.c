@@ -40,7 +40,7 @@ static int setup(void **state) {
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 static void push_env(uint8_t q, uint64_t ts, int64_t wall, uint32_t seq, float t) {
-    EnvSample v = { .temp_c = t, .humidity_pct = 50.0f,
+    EnvSample v = { .temp_c = t, .humidity_pct = 50.0f, .humidity_valid = true,
                     .pressure_hpa = 1013.25f, .pressure_valid = true };
     SpoolRecord r;
     spool_make_env(&r, &v, q, ts, wall, seq);
@@ -71,7 +71,7 @@ static void test_empty_mount(void **state) {
 static void test_fifo_order_and_values(void **state) {
     (void)state;
     /* Push one of each kind with distinct payloads. */
-    EnvSample    e = { .temp_c = 21.5f, .humidity_pct = 55.0f,
+    EnvSample    e = { .temp_c = 21.5f, .humidity_pct = 55.0f, .humidity_valid = true,
                        .pressure_hpa = 1010.0f, .pressure_valid = true };
     Ens160Sample a = { .co2_ppm = 600, .tvoc_ppb = 300, .aqi = 2, .status = 0 };
     RadarSample  d = { .breath_rpm = 16.5f, .heart_bpm = 72.0f,

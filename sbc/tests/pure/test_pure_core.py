@@ -31,7 +31,12 @@ def envelope(seq=1, q=0, wall_ms=-1, **v):
 class TestDecode(unittest.TestCase):
     def test_topic(self):
         self.assertEqual(parse_topic("rmms/dev-1/env"), ("dev-1", "env"))
-        for bad in ("rmms/dev-1", "x/dev-1/env", "rmms/dev-1/ir", "rmms//env"):
+        # `status` is a valid (non-sensor) topic the SBC subscribes to — it must
+        # parse, not dead-letter (else the status="online" → time/set publish
+        # never fires, firmware §9.2.5 / ADR-0003).
+        self.assertEqual(parse_topic("rmms/dev-1/status"), ("dev-1", "status"))
+        for bad in ("rmms/dev-1", "x/dev-1/env", "rmms/dev-1/ir", "rmms//env",
+                    "rmms//status", "rmms/dev-1/time/set"):
             with self.assertRaises(SchemaError):
                 parse_topic(bad)
 
@@ -45,6 +50,12 @@ class TestDecode(unittest.TestCase):
     def test_env_pres_null(self):
         s = decode_sample("u", "env", envelope(temp_c=20.0, hum_pct=50.0, pres_hpa=None))
         self.assertIsNone(s.pres_hpa)
+
+    def test_env_hum_null(self):
+        # BMP280 boards have no humidity sensor (firmware §9.2.2)
+        s = decode_sample("u", "env", envelope(temp_c=20.0, hum_pct=None, pres_hpa=1013.25))
+        self.assertIsNone(s.hum_pct)
+        self.assertAlmostEqual(s.pres_hpa, 1013.25)
 
     def test_wall_ms_sentinel(self):
         s = decode_sample("u", "env", envelope(wall_ms=-1, temp_c=1, hum_pct=2, pres_hpa=3))

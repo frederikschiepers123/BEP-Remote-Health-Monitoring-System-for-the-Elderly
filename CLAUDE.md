@@ -182,11 +182,11 @@ The firmware does **not** own:
 
 | Block            | Part                   | Bus  | Notes                                          |
 | ---------------- | ---------------------- | ---- | ---------------------------------------------- |
-| Environment      | **AHT21** (default) **OR** Bosch BME280 | I²C0 | One I²C footprint, two populate options. AHT21 = temp + humidity (no pressure → `pres_hpa` emitted as `null` per §9.2.3). BME280 = temp + humidity + pressure. Selection via `/cfg/sensors.json` `"env"` field (`"aht21"` \| `"bme280"`); default `"bme280"` for back-compat with pre-AHT21 provisioned devices. AHT21 fixed addr `0x38`; BME280 `0x76` (SDO low) or `0x77`. |
-| Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BME280 `0x76/0x77` or AHT21 `0x38`). Compensation: whichever env driver is active feeds its last temp/hum into the ENS160 TEMP_IN / RH_IN registers every read cycle. |
+| Environment      | **AHT21** **OR** Bosch **BMP280** (default) | I²C0 | One I²C footprint, two populate options. AHT21 = temp + humidity (no pressure → `pres_hpa` emitted as `null` per §9.2.3). BMP280 = temp + pressure (no humidity → `hum_pct` emitted as `null`). The part previously documented as a "BME280" is in fact a **BMP280** (chip ID `0x58`, no humidity sensor) — bench-verified; driver, config value, and docs renamed accordingly. Selection via `/cfg/sensors.json` `"env"` field (`"aht21"` \| `"bmp280"`; legacy `"bme280"` is accepted as an alias for devices provisioned before the rename); default `"bmp280"` when the field is absent. AHT21 fixed addr `0x38`; BMP280 `0x76` (SDO low) or `0x77`. |
+| Air quality      | ScioSense ENS160       | I²C0 | eCO₂ + TVOC + UBA AQI (1–5); default addr `0x53` (no conflict with BMP280 `0x76/0x77` or AHT21 `0x38`). Compensation: whichever env driver is active feeds its last temp/hum into the ENS160 TEMP_IN / RH_IN registers every read cycle (the BMP280 has no humidity sensor, so a neutral 50 % — the chip's datasheet default — is fed instead). |
 | mmWave radar     | **Seeed MR60BHA2** (60 GHz, heart + breath) | UART | 5 V mains, Seeed binary protocol — `[0x01][SEQ][LEN][TYPE][~XOR hdr cksum]` header, see §3.2 framing note. |
 | Light            | **Rohm BH1750FVI** (advanced module, on MR60BHA2 breakout, I²C0 `0x23`) **OR** GL5516 LDR (generic module, ADC0/GPIO26 + 1 kΩ divider to GND) | I²C0 / ADC0 | Two product variants share the same PCB. Selection via `/cfg/sensors.json` `"light"` field (`"bh1750"` \| `"gl5516"`); default `"bh1750"`. BH1750 reports calibrated lux directly (16-bit raw / 1.2). GL5516 needs a per-board power-law calibration (`lux = (A / R_LDR)^(1/B)`, defaults `A=50000, B=0.7`). Both publish the same §9.2.2 payload `{"lux": ...}` on `rmms/<uuid>/light`. See ADR-0001 for the two-variant rationale. |
-| OLED             | 1.3″ 128×64 (**likely SH1106**) | I²C0 | Confirm controller before driver work |
+| OLED             | 2.08″ 256×64 (**SH1122**, 4-bit grayscale) | I²C0 | Controller confirmed on bench (§16-Q1); driver `components/ui_oled/sh1122.c` |
 | Buttons          | 2× momentary           | GPIO | Internal pull-up, hardware debounce optional   |
 | LEDs             | Status indicators      | GPIO | Plus CYW43 onboard LED for net-state           |
 
@@ -195,12 +195,19 @@ v-table (§7.4), selected by `/cfg/sensors.json` `"radar"` (config flag, not
 runtime UART probing):
 - `"bha2"` — Seeed MR60BHA2 (60 GHz, heart + breath + breath-phase), the
   **advanced** module's radar and what this project demos.
-- `"hmmd"` — Seeed 24 GHz HMMD micro-motion module, the **generic** module's
-  radar (ADR-0001, ADR-0007). Adding it was a new `radar_*.c` file plus one
-  line in `radar_select.c` — no change to the task, topics, or payload schema,
-  exactly as the seam promises. Reports presence + respiration (+ distance);
-  it has no breath-phase stream, so `resp_motion` degrades to `null`
-  (graceful), and it often reports no heart rate (`heart_bpm` → `null`, §9.2.2).
+- `"hmmd"` — Waveshare HMMD 24 GHz module (report mode), the **generic**
+  module's radar (ADR-0001, ADR-0007). Adding it was a new `radar_*.c` file plus
+  one line in `radar_select.c` — no change to the task, topics, or payload
+  schema, exactly as the seam promises. It is a **presence + distance + motion**
+  radar with **no respiration or heart rate** and no breath-phase signal, so the
+  driver always emits `breath_bpm`/`heart_bpm` as `0` (→ `null`, §9.2.2) and
+  `resp_motion` as `null` (graceful degradation — radar_driver.h documents this
+  for "a radar with no phase stream"). On an HMMD module the mirror's
+  heart/breath tiles have no data; presence + distance (ADL / presence
+  monitoring, the generic module's job) work fully. Protocol per the previous
+  group's reference driver (CLAUDE.md §18): `F4 F3 F2 F1` header, LE length,
+  payload `presence(1) + distance(2) + 16×gate-energy(2)`, `F8 F7 F6 F5` tail,
+  no checksum.
 
 A third radar is again a new `radar_*.c` plus one `radar_select.c` branch — a
 DFRobot C1001 (a different 24 GHz module, unrelated to the HMMD) driver is **in
@@ -220,7 +227,7 @@ payload respectively. The driver parses this protocol directly; the
 parsed `RadarSample`.
 
 ### 3.3 Power
-- **5 V mains → MCU; MCU 3V3 rail powers BME280, OLED, LDR, buttons, LEDs, IR camera.**
+- **5 V mains → MCU; MCU 3V3 rail powers the env sensor (BMP280/AHT21), ENS160, OLED, LDR, buttons, LEDs.**
 - **mmWave radar runs from its own 5 V mains rail** (high RF draw, isolated).
 - Always-on, no battery, no sleep modes in the v1 firmware.
 
@@ -240,7 +247,8 @@ reads it.
 - **TinyUSB** (bundled with pico-sdk).
 - **lwIP** (bundled, used in `NO_SYS=0` mode under FreeRTOS).
 - **mbedTLS** (bundled, used by lwIP for TLS 1.2/1.3 with ECDSA P-256).
-- **FreeRTOS Kernel** (SMP port via `pico_cyw43_arch_lwip_sys_freertos`).
+- **FreeRTOS Kernel** (SMP port; networking uses the
+  `pico_cyw43_arch_lwip_threadsafe_background` arch, `NO_SYS=1` — see §7/§8.3).
 - **littlefs** for on-flash KV (creds, certs, registration state).
 - **picotool** for `.uf2` build verification and metadata inspection.
 - **OpenOCD + picoprobe** (or a second Pico flashed as `debugprobe`) for SWD.
@@ -261,7 +269,11 @@ sanctioned baseline.
 
 ```bash
 # First-time setup
-git submodule update --init --recursive
+git submodule update --init --recursive   # FreeRTOS-Kernel + littlefs
+# pico-sdk is NOT a submodule: clone it separately and export PICO_SDK_PATH
+#   git clone -b master https://github.com/raspberrypi/pico-sdk.git ~/pico/pico-sdk
+#   cd ~/pico/pico-sdk && git submodule update --init
+#   export PICO_SDK_PATH=~/pico/pico-sdk
 mkdir build && cd build
 cmake -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug ..
 
@@ -306,18 +318,18 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   ├── sensor_env/               # env_driver_t vtable + drivers + env_task
 │   │   ├── env_driver.h          # vtable: init/read_sample/name/ctx
 │   │   ├── env_select.c          # reads /cfg/sensors.json "env", returns driver
-│   │   ├── bme280.c              # BME280 (temp+hum+pres)
+│   │   ├── bmp280.c              # BMP280 (temp+pres; hum_pct null)
 │   │   └── aht21.c               # AHT21 (temp+hum, pres null)
 │   ├── sensor_air/               # ENS160 driver + air_task (consumes env's
 │   │   │                         #   temp/hum for TEMP_IN/RH_IN compensation)
 │   ├── sensor_radar/             # radar_driver_t interface + radar_task
 │   │   ├── radar_bha2.c          # Seeed MR60BHA2 driver (60 GHz, SOF-0x01 framing)
-│   │   ├── radar_hmmd.c          # Seeed 24 GHz HMMD driver (0x53 0x59…0x54 0x43, ADR-0007)
+│   │   ├── radar_hmmd.c          # Waveshare HMMD 24 GHz driver (F4F3F2F1 report mode, ADR-0007)
 │   │   └── radar_select.c        # Reads /cfg/sensors.json, returns the driver
 │   ├── sensor_light/             # BH1750 (I²C lux) driver + light_task
 │   ├── cfg/                      # /cfg/{wifi,broker,sensors}.json loaders
 │   ├── i2c_bus/                  # shared I²C0 bus init + mutex (§7.2)
-│   ├── ui_oled/                  # SH1122 driver + 4-page UI state machine
+│   ├── ui_oled/                  # SH1122 driver + 5-page UI state machine
 │   ├── ui_input/                 # buttons + LEDs
 │   ├── transport_mqtt/           # transport_task: Wi-Fi → lwIP altcp_tls → MQTT
 │   ├── spool/                    # non-volatile flash FIFO for loss-tolerant uplink (ADR-0003)
@@ -327,7 +339,7 @@ Release builds: `-DCMAKE_BUILD_TYPE=RelWithDebInfo` and `-DNDEBUG=1`. Never ship
 │   └── log/                      # tagged logging over USB-serial console (§12)
 │
 ├── third_party/
-│   ├── pico-sdk/                 # submodule
+│   ├── pico-sdk/                 # NOT vendored — external checkout via PICO_SDK_PATH (§4.1/§5)
 │   ├── FreeRTOS-Kernel/          # submodule
 │   └── littlefs/                 # submodule
 │
@@ -350,17 +362,24 @@ should not exist.
 
 ## 7. Concurrency model
 
-FreeRTOS SMP, both M33 cores enabled, tickless idle off (we are always mains-powered).
+FreeRTOS SMP kernel, tickless idle off (we are always mains-powered). **As
+built, every task is pinned to Core 0** (affinity mask `0x1` in
+`app_main.c`): the CYW43 networking arch is
+`pico_cyw43_arch_lwip_threadsafe_background` (`NO_SYS=1`), and the whole
+application fits comfortably on one M33 with the async-context poller. Core 1
+is idle in v1 — the SMP kernel and per-task affinity masks are kept so a
+future rev can spread load once the cyw43 `sys_freertos` path is proven (see
+the note in `lwipopts.h` and the memory of the `sys_freertos` init hang).
 
 ### 7.1 Tasks
 
 | Task              | Core affinity | Priority | Stack  | Notes                                |
 | ----------------- | ------------- | -------- | ------ | ------------------------------------ |
-| `app_main`        | Any           | 2        | 2 KB   | Watchdog kick, supervisor            |
-| `env_task`        | Any           | 3        | 2 KB   | Polls the env_driver_t (BME280 or AHT21 per `/cfg/sensors.json`) at 1 Hz; pushes its temp/hum into the ENS160 compensation regs each cycle |
-| `air_task`        | Any           | 3        | 2 KB   | Polls ENS160 at 1 Hz (warm-up gated) |
-| `radar_task`      | Core 1        | 4        | 4 KB   | UART RX, frame parsing               |
-| `light_task`      | Any           | 3        | 1 KB   | BH1750 I²C read at 0.2 Hz (continuous H-res; lux barely moves at 1 Hz) |
+| `app_main`        | Core 0        | 2        | 2 KB   | Watchdog kick, supervisor            |
+| `env_task`        | Core 0        | 3        | 2 KB   | Polls the env_driver_t (BMP280 or AHT21 per `/cfg/sensors.json`) at 1 Hz; pushes its temp/hum into the ENS160 compensation regs each cycle (50 % RH substitute when the driver has no humidity) |
+| `air_task`        | Core 0        | 3        | 2 KB   | Polls ENS160 at 1 Hz (warm-up gated) |
+| `radar_task`      | Core 0        | 4        | 4 KB   | UART RX, frame parsing               |
+| `light_task`      | Core 0        | 3        | 1 KB   | BH1750 I²C read at 0.2 Hz (continuous H-res; lux barely moves at 1 Hz) |
 | `ui_task`         | Core 0        | 2        | 4 KB   | OLED redraw on button or 1 Hz        |
 | `transport_task`  | Core 0        | 5        | 16 KB  | Wi-Fi + altcp_tls + lwIP MQTT (`transport_mqtt`); sole consumer of the producer queues. Ingests every sample into the NV flash spool (ADR-0003) and drains it to the broker (QoS-1 retry-until-PUBACK); also owns time-sync (`time/set`). ~10 Hz pump. |
 
@@ -476,8 +495,13 @@ not a deferral. (Developer logging still uses a standalone USB-serial console,
   Wi-Fi. With USB-CDC dropped (ADR-0002) that abstraction had a single backend,
   so it was deleted in favour of the hardware-proven lwIP-native path. The
   `stream_t` design is retained in ADR-0002 should a second transport return.
-- All lwIP calls run under `cyw43_arch_lwip_begin/end` (TCP/IP core lock), safe
-  under `sys_freertos` because `LWIP_TCPIP_CORE_LOCKING` is enabled.
+- All lwIP calls run under `cyw43_arch_lwip_begin/end`. The as-built arch is
+  `pico_cyw43_arch_lwip_threadsafe_background` (`NO_SYS=1`,
+  `LWIP_TCPIP_CORE_LOCKING=0`): lwIP runs in the cyw43 async-context, and
+  begin/end takes that context's lock. Only `transport_task` touches
+  cyw43/lwIP (§7), which keeps the locking story trivial. (The `sys_freertos`
+  arch from the original design hung in `cyw43_arch_init` on this SDK +
+  FreeRTOS-Kernel rev; see `lwipopts.h`'s header note.)
 - QoS 1 for vitals; QoS 0 acceptable for the OLED-debug heartbeat topic.
 - Keepalive 60 s on Wi-Fi.
 - Last-Will-and-Testament on `rmms/<uuid>/status` with payload `"offline"`
@@ -501,7 +525,7 @@ from registration. **No spaces, no Dutch diacritics, no PII in topics.**
 
 | Topic                              | Direction | Payload         | QoS |
 | ---------------------------------- | --------- | --------------- | --- |
-| `rmms/<uuid>/env`                  | pub       | JSON env sample (BME280) | 1 |
+| `rmms/<uuid>/env`                  | pub       | JSON env sample (BMP280 or AHT21) | 1 |
 | `rmms/<uuid>/air`                  | pub       | JSON air-quality sample (ENS160) | 1 |
 | `rmms/<uuid>/radar`                | pub       | JSON radar sample (raw + quality flag) | 1 |
 | `rmms/<uuid>/light`                | pub       | JSON light sample | 1 |
@@ -582,9 +606,12 @@ firmware never silently drops samples.
 {"temp_c":21.500,"hum_pct":55.000,"pres_hpa":1013.250}
 ```
 - `pres_hpa` is `null` when the AHT21 env driver is active (it has no
-  pressure sensor); the BME280 driver always emits a numeric value. This
-  is consistent with §9.2.3's "encode `null` for unavailable values" rule
-  — receivers should not assume `pres_hpa` is always numeric.
+  pressure sensor); the BMP280 driver always emits a numeric value.
+- `hum_pct` is `null` when the BMP280 env driver is active (it has no
+  humidity sensor); the AHT21 driver always emits a numeric value.
+- Both are consistent with §9.2.3's "encode `null` for unavailable values"
+  rule — receivers must not assume either field is always numeric. Exactly
+  one of the two is `null` depending on which env part is populated.
 
 **air** (`rmms/<uuid>/air`):
 ```json
@@ -597,8 +624,9 @@ firmware never silently drops samples.
 
 The ENS160's outputs are coupled (TVOC is the raw measurement; eCO₂ and AQI
 are computed by the chip from TVOC + the optional temp/hum compensation
-written via I²C). The driver writes BME280's last temp/hum to the ENS160
-compensation registers every cycle. The chip needs an undocumented warm-up
+written via I²C). The driver writes the active env driver's last temp/hum to
+the ENS160 compensation registers every cycle (50 % RH substitute on BMP280
+boards, which measure no humidity). The chip needs an undocumented warm-up
 period (~5–10 min) after power-up; readings during that window have `q=2`.
 
 **radar** (`rmms/<uuid>/radar`):
@@ -1181,7 +1209,7 @@ production:
   and `host_stubs.c` supplies the symbol bodies (a host-controlled clock,
   no-op `vTaskDelay`, a loadable radar-UART byte feed, etc.). Each test mocks
   only its own transaction surface (the I²C sequence, or the radar byte stream).
-- Current coverage: BME280 compensation, AHT21/AHT20 decode + BUSY path,
+- Current coverage: BMP280 compensation, AHT21/AHT20 decode + BUSY path,
   BH1750 lux conversion, ENS160 validity-flag extraction + STATUS-burst decode
   + init OPMODE-stuck failure, and the MR60BHA2 frame parser (header + data
   `~XOR` checksums, breath/heart/distance decode, corrupt-frame rejection).
@@ -1226,15 +1254,16 @@ Do not skip ahead. Each step assumes the previous works.
 3. **Dev-console logs** — `LOG_I` over the standalone USB-serial dev console
    (`pico_stdio_usb`, §12), viewable in minicom.
 4. **littlefs mount** — read-modify-write a counter at `/state/boot_count.json`.
-5. **Env (AHT21 or BME280)** — env_task driving the env_driver_t v-table,
-   selected via `/cfg/sensors.json` `"env"` field (default AHT21 on the
-   current PCB; BME280 if that footprint is populated). Publishes JSON
-   samples to a local debug sink (no MQTT yet). Validates the snprintf
-   encoder pattern from §9.2 — including the `"pres_hpa": null` path when
-   the AHT21 is selected.
+5. **Env (AHT21 or BMP280)** — env_task driving the env_driver_t v-table,
+   selected via `/cfg/sensors.json` `"env"` field (`"aht21"` \| `"bmp280"`;
+   default `"bmp280"` when absent). Publishes JSON samples to a local debug
+   sink (no MQTT yet). Validates the snprintf encoder pattern from §9.2 —
+   including the `"pres_hpa": null` path when the AHT21 is selected and the
+   `"hum_pct": null` path when the BMP280 is selected.
 5b. **ENS160** — air_task publishing JSON samples. Writes the env driver's
-   last temp/hum to ENS160 compensation registers each cycle (works
-   identically for AHT21 and BME280). Confirm the ~5–10 min warm-up:
+   last temp/hum to ENS160 compensation registers each cycle (works for
+   AHT21 and BMP280 alike; 50 % RH substitute on the humidity-less BMP280).
+   Confirm the ~5–10 min warm-up:
    during it the driver reports `q=2` (degraded) and the AQI sits at 0/1
    until the gas heaters stabilise.
 5c. **BH1750** — light_task publishing JSON samples (`{"lux": ...}`) at
@@ -1268,14 +1297,18 @@ The diagram and conversations to date leave the following unspecified. The
 firmware contains **TODO(spec):** markers wherever an assumption was baked in.
 Resolve each, then strip the TODO.
 
-1. **OLED controller.** Almost certainly SH1106 at 1.3″, but confirm by reading
-   the bare silkscreen on the actual part.
+1. ~~**OLED controller.**~~ **Resolved.** The part is a **2.08″ 256×64 SH1122**
+   (4-bit grayscale), not an SH1106. The driver is `components/ui_oled/sh1122.c`
+   behind the 5-page `ui_oled` state machine; the earlier SH1106 stub was dead
+   code and has been deleted.
 2. ~~**Radar framing parity.**~~ **Resolved.** Bench bring-up of a live
    MR60BHA2 confirmed it does NOT use Andar `0x53 0x59` / `0x54 0x43` framing.
    It uses its own 8-byte SOF-`0x01` header with `~XOR` checksums; see §3.2.
-   The second radar, the 24 GHz HMMD module (`radar_hmmd.c`, ADR-0007), *does*
-   use that `0x53 0x59 … 0x54 0x43` framing — the two are distinct protocols
-   behind the one v-table, which is exactly why the parity question mattered.
+   The second radar, the Waveshare HMMD module (`radar_hmmd.c`, ADR-0007), uses
+   a *third*, different framing — `F4 F3 F2 F1` header / `F8 F7 F6 F5` tail,
+   little-endian length, no checksum (per the previous group's reference driver,
+   §18). Three radars, three protocols, one v-table — exactly why the framing
+   question mattered.
 3. ~~**Tablet bridge ownership.**~~ **Moot for v1.** The `/dev/ttyACMx ↔
    localhost:8883` byte pipe only exists for the USB-CDC transport, which is
    out of scope for v1 (§2.1). If USB-CDC is revived post-v1, the bridge (a
@@ -1300,7 +1333,7 @@ Resolve each, then strip the TODO.
    `wall_ms` at ingest. Before the first sync `wall_ms` is the `-1` sentinel and
    the Radxa substitutes a receive-time estimate (§9.6). No NTP-from-WAN (the
    audit's failure mode). The tablet publishes `time/set` per-device on connect
-   (see `docs/CLAUDE_radxa.md` §17-Q5).
+   (see `sbc/CLAUDE.md` §17-Q5).
 7. **Project CA hosting.** Where does the CA private key live? Air-gapped
    workstation, HSM, or YubiKey? Who has access? What is the procedure for
    re-signing if a device cert is lost or compromised? **The audit shows the
@@ -1335,13 +1368,15 @@ Resolve each, then strip the TODO.
   USB-CDC-era custom `stream_t` stack (`transport_usb`, `transport_selector`,
   `tls_context`, `mqtt_client`, `transport_wifi`) was **deleted**; its design
   lives in ADR-0002. Reviving USB-CDC is a post-v1 ADR (§2.1, §2.2, §8.1, §17).
-- **Second radar driver — 24 GHz HMMD (ADR-0007):** v1 now ships **two** radar
-  drivers behind the `radar_driver_t` v-table, selected by `/cfg/sensors.json`
-  `"radar"`: `"bha2"` (Seeed MR60BHA2, advanced module) and `"hmmd"` (Seeed
-  24 GHz HMMD micro-motion, the generic module's radar per ADR-0001). New file
+- **Second radar driver — Waveshare HMMD 24 GHz (ADR-0007):** v1 now ships
+  **two** radar drivers behind the `radar_driver_t` v-table, selected by
+  `/cfg/sensors.json` `"radar"`: `"bha2"` (Seeed MR60BHA2, advanced module) and
+  `"hmmd"` (Waveshare HMMD report-mode, the generic module's radar per ADR-0001
+  — presence + distance + motion only, no respiration/heart). New file
   `components/sensor_radar/radar_hmmd.c` + one `radar_select.c` branch + one
   `CfgRadarKind` value — no change to the task, the `rmms/<uuid>/radar` topic,
-  or the §9.2 schema, exactly as the seam promises (§3.2, §7.4).
+  or the §9.2 schema, exactly as the seam promises (§3.2, §7.4). Protocol taken
+  from the previous group's working driver (§18).
 - **DFRobot C1001 radar — in development:** a *different* 24 GHz module
   (unrelated to the HMMD) is being added as a third driver behind the v-table.
   The `radar_driver_t` v-table carries the MR60BHA2 + HMMD pair today; the C1001
@@ -1388,8 +1423,8 @@ State these explicitly so reviewers stop asking:
   lives on the Radxa Dragon Q6A, which has a Qualcomm Hexagon NPU (12 TOPS)
   for that workload. The MCU is not in this pipeline at all.
 - **IR camera and any other image sensor** — no image sensor exists on the
-  v1 sensor module. The peripheral set is fixed: environment (BME280) +
-  air quality (ENS160) + radar + light + OLED.
+  v1 sensor module. The peripheral set is fixed: environment (BMP280 or
+  AHT21) + air quality (ENS160) + radar + light + OLED.
 - Encrypted OTA.
 - On-device cert rotation, on-device CSR generation, on-device CA hosting.
 - HTTPS, REST, or any non-MQTT protocol on the device side.
@@ -1404,13 +1439,15 @@ State these explicitly so reviewers stop asking:
 - `docs/technical-audit.md` — independent audit of the previous BAP repository.
   **Authoritative on what not to do.** Section D enumerates concrete defects;
   this firmware is constructed to defeat each one.
-- `docs/BAP_report_PCB_.pdf` — previous group's PCB + firmware thesis.
+- `BAP_report_PCB_.pdf` — previous group's PCB + firmware thesis.
   Behavioural reference for sensor protocols (BME280, HMMD) and the
   4-page OLED UI concept. **Not authoritative on registration, security, or
-  architecture.**
-- `docs/BAP_Protocol_Thesis2.pdf` — parallel team's QR-code / camera-LED
+  architecture.** *Not committed to this repo* (ask the supervisor); the
+  previous group's code and PCB files are under `bestanden_vorige_BAP/`.
+- `BAP_Protocol_Thesis2.pdf` — parallel team's QR-code / camera-LED
   enrollment protocol design. **Historical only — not implemented in this
-  firmware.** Retained for context on what the system used to do.
+  firmware.** Retained for context on what the system used to do. *Not
+  committed to this repo* (ask the supervisor).
 - pico-sdk: <https://github.com/raspberrypi/pico-sdk>
 - FreeRTOS-Kernel SMP port: <https://github.com/FreeRTOS/FreeRTOS-Kernel>
 - littlefs: <https://github.com/littlefs-project/littlefs>

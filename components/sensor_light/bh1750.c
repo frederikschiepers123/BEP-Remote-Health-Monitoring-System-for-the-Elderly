@@ -3,6 +3,7 @@
 
 #include "bh1750.h"
 #include "err.h"
+#include "sensor_cal.h"
 
 /* FreeRTOS resolves to the kernel on target, to test/host/stubs on host. */
 #include "FreeRTOS.h"
@@ -59,7 +60,8 @@ err_t bh1750_read_sample(Bh1750 *dev, Bh1750Sample *out) {
     if (n != (int)sizeof(raw)) return ERR_IO;
 
     uint16_t counts = (uint16_t)((uint16_t)raw[0] << 8 | (uint16_t)raw[1]);
-    out->lux = (float)counts / 1.2f;
+    float lux = (float)counts / 1.2f + CAL_LIGHT_LUX_DELTA;
+    out->lux = (lux < 0.0f) ? 0.0f : lux;
     return ERR_OK;
 }
 

@@ -19,7 +19,7 @@ so a message may be delayed or re-sent after an outage — consumers dedup on `s
 
 | Topic | Direction | QoS | Retained | Notes |
 |---|---|---|---|---|
-| `rmms/<uuid>/env` | publish | 1 | no | Environment sample (BME280 or AHT21) |
+| `rmms/<uuid>/env` | publish | 1 | no | Environment sample (BMP280 or AHT21) |
 | `rmms/<uuid>/air` | publish | 1 | no | Air-quality sample (ENS160) |
 | `rmms/<uuid>/radar` | publish | 1 | no | Radar sample (raw + quality flag) |
 | `rmms/<uuid>/light` | publish | 1 | no | Light sample (BH1750 or GL5516) |
@@ -88,10 +88,13 @@ Inner `v` object:
 ```
 
 - `temp_c` — temperature in °C (`%.3f`).
-- `hum_pct` — relative humidity 0–100 % (`%.3f`).
-- `pres_hpa` — atmospheric pressure in hPa, **or `null`** when the AHT21 driver
-  is active (it has no pressure sensor). BME280 always emits a number. Receivers
-  must not assume `pres_hpa` is numeric (root `CLAUDE.md §9.2.2`/§9.2.3).
+- `hum_pct` — relative humidity 0–100 % (`%.3f`), **or `null`** when the BMP280
+  driver is active (it has no humidity sensor).
+- `pres_hpa` — atmospheric pressure in hPa (`%.3f`), **or `null`** when the
+  AHT21 driver is active (it has no pressure sensor).
+- Exactly one of `hum_pct` / `pres_hpa` is `null`, depending on which env part
+  is populated. Receivers must not assume either is numeric (root
+  `CLAUDE.md §9.2.2`/§9.2.3).
 
 ---
 
@@ -116,11 +119,13 @@ ENS160 TEMP_IN/RH_IN compensation registers every cycle.
 ## `rmms/<uuid>/radar` — radar sample
 
 Produced by either radar driver — the Seeed MR60BHA2 (60 GHz, `"radar":"bha2"`)
-or the Seeed 24 GHz HMMD module (`"radar":"hmmd"`, ADR-0007) — via the common
-`radar_driver_t` interface, so the inner object is radar-independent (root
+or the Waveshare HMMD module (24 GHz, `"radar":"hmmd"`, ADR-0007) — via the
+common `radar_driver_t` interface, so the inner object is radar-independent (root
 `CLAUDE.md §3.2`/§7.4). Fields a given radar does not report are sent as the
-documented sentinel / `null` (the HMMD module has no breath-phase stream, so its
-`resp_motion` is always `null`, and it often reports no `heart_bpm`).
+documented sentinel / `null`. The HMMD is a **presence + distance** radar with
+no respiration or heart sensing, so on an HMMD module `breath_bpm`, `heart_bpm`,
+and `resp_motion` are **always `null`** while `presence` and `distance_mm` are
+live — legitimately absent data, not a fault.
 
 Inner `v` object:
 

@@ -21,7 +21,7 @@ class EnvSample:
     seq: int
     quality: Quality
     temp_c: float
-    hum_pct: float
+    hum_pct: float | None    # None on BMP280 boards (no humidity sensor, firmware §9.2.2)
     pres_hpa: float | None   # None on AHT21 boards (firmware §9.2.2)
 
 

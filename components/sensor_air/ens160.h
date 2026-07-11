@@ -10,12 +10,14 @@
  *     (~3 min after entering standard mode).
  *   - ens160_set_compensation() writes the current ambient temperature
  *     (Celsius) and humidity (%rH) to TEMP_IN / RH_IN. Recommended every
- *     sample for best gas-sensor accuracy; the BME280 supplies both.
+ *     sample for best gas-sensor accuracy; the active env driver supplies
+ *     temperature, plus humidity when the populated part measures it (the
+ *     AHT21 does; the BMP280 has no humidity sensor).
  *   - ens160_read_sample() reads the status byte plus AQI / TVOC / eCO2 in a
  *     single 6-byte burst. Caller must inspect status (see ens160_validity)
  *     to know whether the reading is meaningful.
  *
- * Bus: I²C0 shared with the BME280 (CLAUDE.md §3.2). Default 7-bit address
+ * Bus: I²C0 shared with the env sensor (AHT21/BMP280) (CLAUDE.md §3.2). Default 7-bit address
  * 0x53; 0x52 if the ADDR pin is grounded.
  */
 
@@ -51,6 +53,15 @@ typedef enum {
 #define ENS160_STATUS_STATAS    0x80U   /* an OPMODE is running                */
 #define ENS160_STATUS_STATER    0x40U   /* high-level device error            */
 #define ENS160_STATUS_NEWDAT    0x02U   /* new sample in DATA_* registers      */
+
+/* Consecutive STATAS-clear reads before the read-path recovery re-writes
+ * OPMODE=STANDARD. Must exceed the chip's restart-to-STATAS latency (~1-2
+ * measurement cycles) so a freshly (re)started engine is given time to assert
+ * STATAS rather than being perpetually knocked back into start-up. At the 1 Hz
+ * air_task cadence this is ~15 s. (Was 2 — too aggressive: it re-kicked roughly
+ * every measurement cycle and self-perpetuated STATAS=0 on a *genuine* chip,
+ * seen on the bench 2026-06-19 as status alternating 0x89/0x01.) */
+#define ENS160_STATAS_RECOVER_READS  15U
 
 static inline Ens160Validity ens160_validity(uint8_t status)
 {

@@ -108,17 +108,20 @@ LOG_I("Boot count: %lu", (unsigned long)count);
 
 ---
 
-## Step 5 — Environment (AHT21 or BME280)
+## Step 5 — Environment (AHT21 or BMP280)
 
 **Goal:** `env_task` drives the `env_driver_t` v-table and publishes JSON samples
 to a local debug sink (not yet MQTT). Selected via `/cfg/sensors.json` `"env"`
-(`"aht21"` | `"bme280"`). (`test/bringup/bme280_only.c`.)
+(`"aht21"` | `"bmp280"`; legacy `"bme280"` accepted as an alias).
+(`test/bringup/bmp280_only.c`, `test/bringup/aht21_only.c`.)
 
 - Verify I²C0 wiring (GP8 SDA / GP9 SCL) and pull-ups.
 - Log each sample; validate the `snprintf` encoder, **including the
-  `"pres_hpa": null` path when the AHT21 is selected** (it has no pressure
-  sensor).
-- Expected: temp ~20–30 °C, humidity ~20–80 %, pressure ~950–1050 hPa (BME280).
+  `"pres_hpa": null` path when the AHT21 is selected** (no pressure sensor)
+  **and the `"hum_pct": null` path when the BMP280 is selected** (no humidity
+  sensor — the part is a BMP280, chip ID `0x58`, not a BME280).
+- Expected: temp ~20–30 °C; humidity ~20–80 % (AHT21); pressure ~950–1050 hPa
+  (BMP280).
 
 **Pass:** 1 Hz samples with plausible values; `q=0`; no `ERR_IO`.
 
@@ -138,11 +141,11 @@ driver reports `q=2` and AQI sits low until the gas heaters stabilise.
 
 ## Step 6 — OLED
 
-**Goal:** SH1106 shows page 1 (status) and page 2 (last env sample); the button
-cycles pages. (`test/bringup/oled_only.c`.)
+**Goal:** SH1122 (256×64) shows page 1 (status) and page 2 (last env sample);
+the button cycles pages. (`test/bringup/oled_only.c`.)
 
-- I²C0 address `0x3C` (SA0 low) / `0x3D`. Confirm the controller is SH1106 (root
-  `CLAUDE.md §16 Q1`).
+- I²C0 address `0x3C` (SA0 low) / `0x3D`. Controller is SH1122 (confirmed,
+  root `CLAUDE.md §16 Q1`).
 - One user button on GP16 (active-low, internal pull-up); `ui_input_init()`.
 
 **Pass:** pages cycle on press; env values update at 1 Hz; no I²C errors.
@@ -171,26 +174,31 @@ The plausibility/median/breath-hold post-processing on top of the driver is
 
 ### Step 7b — HMMD radar variant + selection (generic module, ADR-0007)
 
-**Goal:** the same firmware drives the 24 GHz HMMD module with no rebuild —
-just a config flag. Only relevant on a board populated with the HMMD part.
+**Goal:** the same firmware drives the Waveshare HMMD (24 GHz) module with no
+rebuild — just a config flag. Only relevant on a board populated with the HMMD
+part. Protocol is the previous group's reference driver
+(`bestanden_vorige_BAP/.../lib/hmmd_mpy.py`, CLAUDE.md §18): `F4 F3 F2 F1`
+header, LE length, `presence + distance + 16 gate energies`, `F8 F7 F6 F5` tail,
+no checksum. `init` sends the Report-Mode command first.
 
 - Set `/cfg/sensors.json` `"radar": "hmmd"`; power-cycle.
 - On boot the log shows `Radar driver selected: 24 GHz HMMD` and
-  `init OK … (HMMD protocol)` — confirms `radar_select_from_config()` picked the
-  right driver with no code change (same `RadarSample` → same `rmms/<uuid>/radar`).
-- Wave/sit in front of the radar; `presence=true`; `breath_bpm` plausible.
+  `init OK … (HMMD report-mode protocol)` — confirms `radar_select_from_config()`
+  picked the right driver with no code change (same `RadarSample` → same
+  `rmms/<uuid>/radar`).
+- Wave/sit in front of the radar; `presence=true`, `distance_mm` tracks range.
 
 **Pass:**
 - Correct driver name in the startup `LOG_I`; `"bha2"` vs `"hmmd"` swaps drivers
   with no rebuild.
-- `resp_motion` is `null` on the wire (HMMD has no breath-phase stream — graceful
-  degradation, ADR-0007); `heart_bpm` may be `null` if this module variant does
-  not report it.
-- **TODO(spec):** the HMMD `(CTRL, CMD)` report codes in `radar_hmmd.c` are
-  firmware-revision-dependent — confirm them against the live module's datasheet
-  /UART dump and strip the marker (same step the MR60BHA2 went through for §3.2).
-  The frame envelope (`0x53 0x59 … 0x54 0x43`, sum checksum) is already
-  host-tested (`test/host/test_radar_hmmd.c`).
+- `presence` and `distance_mm` are live. `heart_bpm`, `breath_bpm`, and
+  `resp_motion` are **always `null`** — the HMMD has no respiration/heart
+  sensing (graceful degradation, ADR-0007), not a fault.
+- **TODO(spec):** confirm the distance **unit** against a tape measure — the
+  reference used a 0.7 m gate factor, the driver assumes cm→mm
+  (`HMMD_DIST_MM_PER_RAW`); adjust and strip the marker. The frame envelope
+  (`F4 F3 F2 F1 … F8 F7 F6 F5`) is already host-tested
+  (`test/host/test_radar_hmmd.c`).
 
 ---
 

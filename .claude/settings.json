@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f \"mosquitto_sub.*rmms\")",
+      "WebFetch(domain:www.sciosense.com)"
+    ]
+  }
+}

@@ -62,6 +62,14 @@ module.exports = NodeHelper.create({
         if (notification !== "CONNECT_MQTT") return;
         const self = this;
 
+        // One MQTT client only. The mirror runs serveronly, so the browser
+        // module re-sends CONNECT_MQTT on every socket (re)connect; without this
+        // guard each one opens another mqtt client sharing clientId mirror-<id>,
+        // and they kick each other off the broker ("session taken over") in a
+        // ~5 s loop → no stable subscription → tiles stay "Measuring". Reuse the
+        // existing client; its own reconnectPeriod handles genuine drops.
+        if (self.mqttClient) return;
+
         const ca   = readFileIfSet(payload.caFile);
         const cert = readFileIfSet(payload.certFile);
         const key  = readFileIfSet(payload.keyFile);
@@ -84,6 +92,7 @@ module.exports = NodeHelper.create({
                     payload.broker, "TLS=" + useTls, "clientId=" + opts.clientId);
 
         const client = mqtt.connect(payload.broker, opts);
+        self.mqttClient = client;
 
         client.on("connect", function () {
             console.log("MQTT connected — subscribing to:", payload.topics);

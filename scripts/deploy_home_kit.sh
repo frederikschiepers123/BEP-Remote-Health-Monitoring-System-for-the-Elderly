@@ -200,6 +200,20 @@ cmd_tablet() {
     scp_t "/tmp/config-$home.js" "${TERMUX_USER}@${tip}:${TABLET_MM_DIR}/config/config.js"
     ok "MagicMirror config.js rendered (clientId=$MIRROR_CN, broker=mqtts://localhost:8883)"
 
+    # MagicMirror² custom styling. The readable Tiresias font + column tile
+    # layout live ONLY in config/custom.css and its @font-face .woff. Neither is
+    # part of upstream MagicMirror, so a re-clone / re-setup of the tablet's
+    # ~/MagicMirror silently wipes them and the UI falls back to default Roboto
+    # + default layout. Push them every deploy so the readable UI is durable.
+    local mm_css="MagicMirror/config/custom.css"
+    local mm_font="MagicMirror/css/fonts/Tiresias_Infofont-webfont.woff"
+    [ -f "$mm_css" ]  || die "missing $mm_css (readable-font + tile-layout source)"
+    [ -f "$mm_font" ] || die "missing $mm_font (Tiresias @font-face source)"
+    ssh_t "$tip" "mkdir -p '$TABLET_MM_DIR/css/fonts'"
+    scp_t "$mm_css"  "${TERMUX_USER}@${tip}:${TABLET_MM_DIR}/config/custom.css"
+    scp_t "$mm_font" "${TERMUX_USER}@${tip}:${TABLET_MM_DIR}/css/fonts/"
+    ok "MagicMirror custom.css + Tiresias font in place (readable font + tile layout)"
+
     # Kick the self-heal launcher (idempotent; every service is pgrep-guarded).
     c "tablet: launching services (tablet_boot.sh)"
     ssh_t "$tip" "sh '$RMMS_DIR/tablet_boot.sh'" || warn "tablet_boot returned non-zero (check $RMMS_DIR/boot.log)"
@@ -283,7 +297,7 @@ cmd_pico() {
 EOF
     # Default sensor config — adjust per board variant (§3.2) if needed.
     [ -f "$dev/sensors.json" ] || \
-        echo '{"_v":1,"env":"bme280","light":"bh1750","radar":"bha2"}' > "$dev/sensors.json"
+        echo '{"_v":1,"env":"bmp280","light":"bh1750","radar":"bha2"}' > "$dev/sensors.json"
 
     c "pico: provisioning over $port (verify bringup_provision.uf2 is flashed)"
     python3 scripts/provision_device.py "$port" "$dev" \

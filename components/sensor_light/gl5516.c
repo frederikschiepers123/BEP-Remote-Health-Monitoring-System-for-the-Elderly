@@ -5,6 +5,7 @@
 
 #include "gl5516.h"
 #include "err.h"
+#include "sensor_cal.h"
 
 #ifndef HOST_TEST
 #include "hardware/adc.h"
@@ -68,7 +69,7 @@ err_t gl5516_read_sample(Gl5516 *dev, Gl5516Sample *out)
 
     /* lux = (A / R_LDR)^(1/B). powf handles the typical 1–1e5 lux range
      * without losing precision. */
-    float lux = powf(dev->ldr_a / r_ldr, 1.0f / dev->ldr_b);
+    float lux = powf(dev->ldr_a / r_ldr, 1.0f / dev->ldr_b) + CAL_LIGHT_LUX_DELTA;
     if (lux < 0.0f)  lux = 0.0f;
 
     out->voltage_v      = v_adc;

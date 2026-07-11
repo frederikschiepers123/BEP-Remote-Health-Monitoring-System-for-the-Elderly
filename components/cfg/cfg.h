@@ -38,15 +38,15 @@ typedef struct {
 typedef enum {
     CFG_RADAR_NONE  = 0,
     CFG_RADAR_BHA2,     /* Seeed MR60BHA2 — 60 GHz heart + breath */
-    CFG_RADAR_HMMD,     /* Seeed 24 GHz HMMD micro-motion module (ADR-0007) */
+    CFG_RADAR_HMMD,     /* Waveshare HMMD 24 GHz presence/distance module (ADR-0007) */
 } CfgRadarKind;
 
 /* Environmental-sensor selection. The PCB exposes a single I²C footprint
- * that can be populated with either a BME280 (temp + humidity + pressure)
- * or an AHT21 (temp + humidity only). See CLAUDE.md §3.2. */
+ * that can be populated with either a BMP280 (temp + pressure, no humidity)
+ * or an AHT21 (temp + humidity, no pressure). See CLAUDE.md §3.2. */
 typedef enum {
-    CFG_ENV_DEFAULT = 0,  /* sensors.json had no "env" field; treat as BME280 */
-    CFG_ENV_BME280,
+    CFG_ENV_DEFAULT = 0,  /* sensors.json had no "env" field; treat as BMP280 */
+    CFG_ENV_BMP280,
     CFG_ENV_AHT21,
 } CfgEnvKind;
 

@@ -48,6 +48,7 @@ static char             s_diag[24] = "boot";
 
 static volatile float   s_env_temp = 0.0f, s_env_hum = 0.0f, s_env_pres = 0.0f;
 static volatile bool    s_env_pres_valid = false;
+static volatile bool    s_env_hum_valid = false;
 static volatile uint8_t s_env_q = 3;
 static volatile bool    s_env_have = false;
 
@@ -83,11 +84,12 @@ void ui_oled_set_diag(const char *msg)
     }
 }
 
-void ui_oled_set_env(float temp_c, float hum_pct, float pres_hpa,
-                     bool pres_valid, uint8_t q)
+void ui_oled_set_env(float temp_c, float hum_pct, bool hum_valid,
+                     float pres_hpa, bool pres_valid, uint8_t q)
 {
     s_env_temp = temp_c; s_env_hum = hum_pct; s_env_pres = pres_hpa;
-    s_env_pres_valid = pres_valid; s_env_q = q; s_env_have = true;
+    s_env_hum_valid = hum_valid; s_env_pres_valid = pres_valid;
+    s_env_q = q; s_env_have = true;
 }
 
 void ui_oled_set_air(uint16_t co2_ppm, uint16_t tvoc_ppb, uint8_t aqi, uint8_t q)
@@ -178,7 +180,11 @@ static void render_env(Sh1122 *o)
     if (s_env_have && s_env_q == 0) {
         snprintf(line, sizeof(line), "T %5.1f C", (double)s_env_temp);
         sh1122_draw_text(o, 0, 18, 2, line);
-        snprintf(line, sizeof(line), "H %5.1f %%", (double)s_env_hum);
+        if (s_env_hum_valid) {
+            snprintf(line, sizeof(line), "H %5.1f %%", (double)s_env_hum);
+        } else {
+            snprintf(line, sizeof(line), "H --");   /* BMP280: no humidity */
+        }
         sh1122_draw_text(o, 0, 36, 2, line);
         if (s_env_pres_valid) {
             snprintf(line, sizeof(line), "P %6.1f HPA", (double)s_env_pres);

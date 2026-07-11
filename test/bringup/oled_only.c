@@ -2,13 +2,13 @@
  * Bring-up — SH1122 OLED (256×64 4-bit grayscale) status pages, no network.
  *
  * Renders four status pages, auto-cycled every 3 s and also advanced on each
- * press of the display-control button (GP16, active low). If the BME280 +
+ * press of the display-control button (GP16, active low). If the BMP280 +
  * ENS160 are wired on the shared I²C0 bus they're sampled live and shown on
  * their respective pages; if not, the pages display "—" placeholders.
  *
  * Pages:
  *   1. RMMS header + uptime + sensor probe status
- *   2. Environment (BME280)
+ *   2. Environment (BMP280 — temp + pressure; no humidity on this part)
  *   3. Air quality (ENS160 — warmup-aware)
  *   4. Build info
  *
@@ -23,7 +23,7 @@
 
 #include "board_pico2wh.h"
 #include "sh1122.h"
-#include "bme280.h"
+#include "bmp280.h"
 #include "ens160.h"
 #include "err.h"
 
@@ -48,12 +48,12 @@ void vApplicationMallocFailedHook(void)
 }
 
 static Sh1122  s_oled;
-static Bme280  s_bme;
+static Bmp280  s_bmp;
 static Ens160  s_ens;
-static bool    s_bme_ok = false;
+static bool    s_bmp_ok = false;
 static bool    s_ens_ok = false;
 
-static Bme280Sample s_env_last;
+static Bmp280Sample s_env_last;
 static Ens160Sample s_air_last;
 static bool s_env_valid = false;
 static bool s_air_valid = false;
@@ -83,7 +83,7 @@ static void i2c_scan(void)
 
 static void sample_sensors(void)
 {
-    if (s_bme_ok && bme280_read_sample(&s_bme, &s_env_last) == ERR_OK) s_env_valid = true;
+    if (s_bmp_ok && bmp280_read_sample(&s_bmp, &s_env_last) == ERR_OK) s_env_valid = true;
     if (s_ens_ok && ens160_read_sample(&s_ens, &s_air_last) == ERR_OK) s_air_valid = true;
 }
 
@@ -118,8 +118,8 @@ static void draw_page_header(uint8_t page_num, uint32_t uptime_s)
     char line[40];
     snprintf(line, sizeof(line), "UPTIME %lu S", (unsigned long)uptime_s);
     sh1122_draw_text(&s_oled, 0, 18, 2, line);
-    snprintf(line, sizeof(line), "BME280:%s   ENS160:%s",
-             s_bme_ok ? "OK" : "--",
+    snprintf(line, sizeof(line), "BMP280:%s   ENS160:%s",
+             s_bmp_ok ? "OK" : "--",
              s_ens_ok ? "OK" : "--");
     sh1122_draw_text(&s_oled, 0, 36, 2, line);
     draw_footer_page_indicator(page_num);
@@ -130,11 +130,11 @@ static void draw_page_env(uint8_t page_num)
     sh1122_clear(&s_oled);
     sh1122_draw_text(&s_oled, 0, 0, 2, "ENVIRONMENT");
     char line[40];
-    if (s_bme_ok && s_env_valid) {
+    if (s_bmp_ok && s_env_valid) {
         snprintf(line, sizeof(line), "T %5.1f C", (double)s_env_last.temp_c);
         sh1122_draw_text(&s_oled, 0, 18, 2, line);
-        snprintf(line, sizeof(line), "H %5.1f %%", (double)s_env_last.humidity_pct);
-        sh1122_draw_text(&s_oled, 0, 36, 2, line);
+        /* BMP280 has no humidity sensor — mirror the production UI's "H --" */
+        sh1122_draw_text(&s_oled, 0, 36, 2, "H --");
         snprintf(line, sizeof(line), "P %6.1f HPA", (double)s_env_last.pressure_hpa);
         sh1122_draw_text(&s_oled, 124, 18, 2, line);  /* second column */
     } else {
@@ -237,8 +237,8 @@ static void render_task(void *arg)
     }
     printf("[oled] sh1122 init OK at 0x%02x\n", BOARD_OLED_ADDR);
 
-    s_bme_ok = (bme280_init(&s_bme, BOARD_I2C_INST, BOARD_BME280_ADDR) == ERR_OK);
-    printf("[oled] BME280: %s\n", s_bme_ok ? "OK" : "absent/failed");
+    s_bmp_ok = (bmp280_init(&s_bmp, BOARD_I2C_INST, BOARD_BMP280_ADDR) == ERR_OK);
+    printf("[oled] BMP280: %s\n", s_bmp_ok ? "OK" : "absent/failed");
     s_ens_ok = (ens160_init(&s_ens, BOARD_I2C_INST, BOARD_ENS160_ADDR) == ERR_OK);
     printf("[oled] ENS160: %s\n", s_ens_ok ? "OK" : "absent/failed");
 
