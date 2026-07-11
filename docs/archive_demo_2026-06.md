@@ -1,3 +1,9 @@
+> **ARCHIVED — historical snapshot (June 2026).** This was the runbook for an
+> early supervisor demo, before the sensors were wired and while MagicMirror
+> still ran on the laptop. Several statements no longer hold (USB-CDC framing,
+> BME280 naming, step counts). The current demo procedure is `DEMO.md` at the
+> repo root; current system state is `docs/handover.md`.
+
 # Supervisor demo — runbook
 
 **Scope of this session:** prove the end-to-end secure path between the

@@ -3,8 +3,8 @@
 # build.sh — compile the sensor-module firmware that gets flashed onto the
 #            Raspberry Pi Pico 2 WH (RP2350).
 #
-# Produces  build/sensor_module.uf2   (BOOTSEL drag-and-drop image)
-# and       build/sensor_module.elf   (SWD / picotool / debugger image).
+# Produces  build/main/sensor_module.uf2   (BOOTSEL drag-and-drop image)
+# and       build/main/sensor_module.elf   (SWD / picotool / debugger image).
 #
 # This builds ONLY the firmware. Device certs and littlefs /cfg + /certs are
 # factory-provisioned on a separate, access-controlled workstation (CLAUDE.md

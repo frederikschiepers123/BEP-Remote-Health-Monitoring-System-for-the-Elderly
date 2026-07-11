@@ -4,15 +4,18 @@
 # Usage:
 #   scripts/demo_start.sh <tablet-ip> [device-uuid]
 #
-# What it does (≈20 seconds + one MM² boot):
+# What it does (≈20 seconds):
 #   1. Refresh the broker cert + restart Mosquitto for today's tablet IP.
 #   2. Start the tablet's mDNS responder so `tablet.local` resolves on the LAN
-#      (this is what lets the Pico find the broker by name — see §8.2 / ADR).
-#   3. Point the MagicMirror² bridge at the broker IP (the bridge runs in WSL,
-#      which has no mDNS resolver, so it still needs the literal IP).
+#      (this is what lets the Pico find the broker by name — see §8.2 / ADR),
+#      and (re)start the radar-presence→screen bridge (step 2b in the body).
+#   3. (Nothing — the mirror's bridge runs on the tablet and talks to the
+#      broker over localhost; no laptop-side config to point anywhere.)
 #   4. Refresh the demo device bundle on the Windows side (host-only broker.json)
 #      for the *one-time* provisioning; see note below.
-#   5. (Re)start MagicMirror², logging to /tmp/mm2.log.
+#   5. NOT started here: MagicMirror² runs ON THE TABLET via Termux:Boot
+#      (tablet_boot.sh). A laptop-side MM would reuse the same mirror cert /
+#      client-id and kick the tablet's bridge off the broker.
 #
 # THE PAYOFF (mDNS): broker.json is now host-only (`tablet.local`, empty ip).
 # Once the demo Pico has been provisioned with it ONCE, the IP can change every
